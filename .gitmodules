@@ -1,0 +1,3 @@
+[submodule "lib/wtx"]
+	path = lib/wtx
+	url = https://github.com/snomiao/wtx

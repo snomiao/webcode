@@ -1,0 +1,34 @@
+{
+  "name": "web-code",
+  "private": true,
+  "type": "module",
+  "description": "Open GitHub repositories locally in browser VS Code or a web terminal",
+  "scripts": {
+    "dev": "portless webcode bun start.ts",
+    "dev:direct": "bun run start.ts",
+    "shell": "vite --port 3001 --strictPort",
+    "build": "vite build",
+    "typecheck": "tsc --noEmit --moduleResolution bundler --module preserve --target es2022 --jsx react-jsx --skipLibCheck start.ts vite.config.ts shell.ts terminal.tsx provision.ts provision-client.ts"
+  },
+  "devDependencies": {
+    "@types/react": "^18",
+    "@types/react-dom": "^18",
+    "@types/ws": "^8.18.1",
+    "@vitejs/plugin-react": "^4",
+    "portless": "^0.15.4",
+    "typescript": "^5.9.0",
+    "vite": "^7.3.1"
+  },
+  "dependencies": {
+    "@parcel/watcher": "^2.5.6",
+    "@xterm/addon-clipboard": "^0.2.0",
+    "@xterm/addon-fit": "^0.11.0",
+    "@xterm/addon-search": "^0.16.0",
+    "@xterm/addon-unicode11": "^0.9.0",
+    "@xterm/addon-web-links": "^0.12.0",
+    "@xterm/xterm": "^6.0.0",
+    "react": "^18",
+    "react-dom": "^18",
+    "ws": "^8.21.0"
+  }
+}
