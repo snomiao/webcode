@@ -9,7 +9,8 @@
  */
 
 import { spawn, type ChildProcess } from "node:child_process";
-import { mkdirSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, readFileSync, readdirSync, writeFileSync } from "node:fs";
+import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 
@@ -36,6 +37,37 @@ const MAX_BACKOFF_MS = 30_000;
 // next death restarts the backoff from zero rather than counting as part of
 // a crash loop.
 const STABLE_MS = 10_000;
+
+/**
+ * Locate the `code-server` binary from the VS Code CLI serve-web cache.
+ * VS Code 1.132+ split the serve-web binary out from the main `code` shell
+ * script — it's no longer `code serve-web` but `code-server` at:
+ *   ~/.vscode/cli/serve-web/<version>/bin/code-server   (macOS)
+ *   ~/.codehost/vscode/<version>/code                    (legacy codehost)
+ * Falls back to the legacy `code serve-web` shell command if needed.
+ * Returns `{ cmd, isLegacy }` — legacy needs `[serve-web, ...args]`, the new
+ * code-server binary takes the serve-web flags directly.
+ */
+function findCodeServer(): { cmd: string; legacy: boolean } {
+  const serveWebDir = path.join(os.homedir(), ".vscode", "cli", "serve-web");
+  const lruPath = path.join(serveWebDir, "lru.json");
+  let versions: string[] = [];
+  try {
+    versions = JSON.parse(readFileSync(lruPath, "utf-8"));
+  } catch { /* ok */ }
+  for (const ver of versions) {
+    const bin = path.join(serveWebDir, ver, "bin", "code-server");
+    if (existsSync(bin)) return { cmd: bin, legacy: false };
+  }
+  const codehostDir = path.join(os.homedir(), ".codehost", "vscode");
+  try {
+    for (const ver of readdirSync(codehostDir)) {
+      const bin = path.join(codehostDir, ver, "code");
+      if (existsSync(bin)) return { cmd: bin, legacy: true };
+    }
+  } catch { /* not present */ }
+  return { cmd: "code", legacy: true };
+}
 
 /**
  * Pre-seed VS Code's User settings for the embedded serve-web instance.
@@ -107,19 +139,13 @@ function supervise(cmd: string, args: string[], label: string): void {
 async function main() {
   // 1. VS Code web server
   seedVscodeSettings();
+  const { cmd: codeServerBin, legacy } = findCodeServer();
+  const codeServerArgs = legacy
+    ? ["serve-web", "--port", String(VSCODE_PORT), "--server-base-path", VSCODE_BASE, "--server-data-dir", VSCODE_DATA_DIR, "--without-connection-token", "--accept-server-license-terms"]
+    : ["--port", String(VSCODE_PORT), "--server-base-path", VSCODE_BASE, "--server-data-dir", VSCODE_DATA_DIR, "--without-connection-token", "--accept-server-license-terms"];
   supervise(
-    "code",
-    [
-      "serve-web",
-      "--port",
-      String(VSCODE_PORT),
-      "--server-base-path",
-      VSCODE_BASE,
-      "--server-data-dir",
-      VSCODE_DATA_DIR,
-      "--without-connection-token",
-      "--accept-server-license-terms",
-    ],
+    codeServerBin,
+    codeServerArgs,
     "code serve-web",
   );
 
