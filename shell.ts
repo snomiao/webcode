@@ -1,3 +1,4 @@
+/// <reference types="vite/client" />
 /**
  * Client shell. Reads the pretty GitHub-style URL, asks the server to
  * provision the matching local worktree (clone if missing, fetch +
@@ -20,6 +21,9 @@ import {
   type Config,
   type GitStatus,
 } from "./provision-client";
+
+const BASE_PATH = import.meta.env.BASE_URL.replace(/\/$/, "");
+const atBase = (pathname: string) => `${BASE_PATH}${pathname}`;
 
 function setStatus(msg: HTMLElement, html: string) {
   msg.innerHTML = html;
@@ -58,7 +62,7 @@ async function main() {
     // the repo path as `?repo=` so terminal.html is reached at a clean URL
     // (vite's SPA fallback otherwise wouldn't serve it under a repo path).
     const rel = repoPathFromLocation();
-    location.replace(`/terminal.html?repo=${encodeURIComponent(rel)}`);
+    location.replace(`${atBase("/terminal.html")}?repo=${encodeURIComponent(rel)}`);
     return;
   }
 
@@ -77,7 +81,7 @@ async function main() {
 
   let cfg: Config;
   try {
-    cfg = await (await fetch("/__config")).json();
+    cfg = await (await fetch(atBase("/__config"))).json();
   } catch (e) {
     setStatus(msg, `Could not load /__config: ${e}`);
     return;
@@ -128,7 +132,10 @@ async function main() {
 
 /** Accept both /github.com/<owner>/... and the legacy /<owner>/... shape. */
 function repoPathFromLocation(): string {
-  return decodeURIComponent(location.pathname.replace(/^\/+/, "")).replace(
+  const pathname = location.pathname.startsWith(`${BASE_PATH}/`)
+    ? location.pathname.slice(BASE_PATH.length)
+    : location.pathname;
+  return decodeURIComponent(pathname.replace(/^\/+/, "")).replace(
     /^github\.com\/+/,
     "",
   );
@@ -353,7 +360,7 @@ function openVscode(
   msg: HTMLElement,
   folder: string,
 ) {
-  frame.src = `/_vscode/?folder=${encodeURIComponent(folder)}`;
+  frame.src = `${atBase("/_vscode/")}?folder=${encodeURIComponent(folder)}`;
   frame.hidden = false;
   frame.addEventListener("load", () => (msg.hidden = true), { once: true });
 }

@@ -1,3 +1,4 @@
+/// <reference types="vite/client" />
 /**
  * Web-terminal UI (`?ui=wtx`). Mounts the wtx React xterm terminal,
  * connected to the wtx PTY server proxied at `/_wtx/`, opened in the
@@ -14,13 +15,16 @@ import { createRoot } from "react-dom/client";
 import { WTx } from "./lib/wtx/lib/wtx-react/src";
 import { provisionFromLocation, type Config } from "./provision-client";
 
+const BASE_PATH = import.meta.env.BASE_URL.replace(/\/$/, "");
+const atBase = (pathname: string) => `${BASE_PATH}${pathname}`;
+
 async function main() {
   const root = createRoot(document.getElementById("root")!);
   const status = document.getElementById("status")!;
 
   let cfg: Config;
   try {
-    cfg = await (await fetch("/__config")).json();
+    cfg = await (await fetch(atBase("/__config"))).json();
   } catch (e) {
     status.textContent = `Could not load /__config: ${e}`;
     return;
@@ -45,7 +49,7 @@ async function main() {
   status.hidden = true;
   root.render(
     <StrictMode>
-      <WTx wsUrl="/_wtx/" cwd={cwd} />
+      <WTx wsUrl={atBase("/_wtx/")} cwd={cwd} />
     </StrictMode>,
   );
 }

@@ -15,12 +15,24 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 
 const HERE = path.dirname(fileURLToPath(import.meta.url));
-const VSCODE_PORT = 9999;
-const VSCODE_BASE = "/_vscode/";
+const VSCODE_PORT = Number(process.env.WEB_CODE_VSCODE_PORT || 9999);
+const TERMINAL_PORT = Number(process.env.WEB_CODE_TERMINAL_PORT || 3004);
+const BASE_PATH = normalizeBasePath(process.env.WEB_CODE_BASE_PATH);
+const VSCODE_BASE = `${BASE_PATH}/_vscode/`.replace(/^\/\//, "/");
 const SHELL_PORT = Number(process.env.PORT || 3001);
 // Lab-local server data dir so we can pre-seed settings (and not pollute
 // the user's global ~/.vscode-server).
-const VSCODE_DATA_DIR = path.join(HERE, ".vscode-serve-web");
+const VSCODE_DATA_DIR = path.join(
+  HERE,
+  VSCODE_PORT === 9999
+    ? ".vscode-serve-web"
+    : `.vscode-serve-web-${VSCODE_PORT}`,
+);
+
+function normalizeBasePath(value?: string): string {
+  if (!value || value === "/") return "";
+  return `/${value.replace(/^\/+|\/+$/g, "")}`;
+}
 
 // Each long-lived child is supervised: if it dies while we're still up
 // (e.g. vite gets SIGTERM'd, or VS Code's server crashes), we respawn it
@@ -96,7 +108,12 @@ function seedVscodeSettings(): void {
 // spawn can't exec directly — it needs a shell. Harmless on Unix.
 const NEEDS_SHELL = process.platform === "win32";
 
-function supervise(cmd: string, args: string[], label: string): void {
+function supervise(
+  cmd: string,
+  args: string[],
+  label: string,
+  env?: NodeJS.ProcessEnv,
+): void {
   let restarts = 0;
   let startedAt = 0;
 
@@ -112,6 +129,7 @@ function supervise(cmd: string, args: string[], label: string): void {
       stdio: "inherit",
       shell: NEEDS_SHELL,
       cwd: HERE,
+      env: { ...process.env, ...env },
     });
     startedAt = Date.now();
     children.set(label, child);
@@ -158,12 +176,18 @@ async function main() {
   );
 
   // 3. wtx PTY WebSocket server (web terminal backend, ?ui=wtx)
-  supervise("bun", [path.join(HERE, "lib", "wtx", "wtx.mjs")], "wtx terminal");
+  supervise(
+    "bun",
+    [path.join(HERE, "lib", "wtx", "wtx.mjs")],
+    "wtx terminal",
+    { TERMINAL_WS_PORT: String(TERMINAL_PORT) },
+  );
 
   // Give the child services a moment to start before printing the URL.
   await new Promise((r) => setTimeout(r, 1500));
 
-  const base = process.env.PORTLESS_URL || `http://localhost:${SHELL_PORT}`;
+  const origin = process.env.PORTLESS_URL || `http://localhost:${SHELL_PORT}`;
+  const base = `${origin}${BASE_PATH}`;
   console.log(
     "[webcode] ready.\n" +
       `  VS Code : ${base}/github.com/<owner>/<repo>/tree/<branch>\n` +

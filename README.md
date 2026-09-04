@@ -43,6 +43,51 @@ bun run dev:direct
 
 This exposes the Vite shell at `http://localhost:3001`.
 
+Two differently mounted instances can run together by assigning distinct
+internal VS Code and terminal ports to one of them:
+
+```sh
+WEB_CODE_VSCODE_PORT=9998 WEB_CODE_TERMINAL_PORT=3005 bun run dev
+```
+
+This is useful when a `/webcode` Tailscale instance already uses the default
+ports while the root-mounted Portless instance should remain available.
+
+## Tailscale Serve
+
+Install the CLI locally (for development, `bun link`), then configure a
+persistent HTTPS mount on this machine's Tailscale name:
+
+```sh
+webcode setup --tailscale
+webcode
+```
+
+The first command saves the base path in `~/.config/webcode/config.json` and
+configures Tailscale Serve in the background. The second starts Webcode with
+all browser, API, WebSocket, terminal, and VS Code Server routes below:
+
+```text
+https://<machine>.<tailnet>.ts.net/webcode/
+```
+
+Use a different mount or local port when needed:
+
+```sh
+webcode setup --tailscale --path /code --port 3101
+```
+
+Other services can share the same hostname at other paths:
+
+```sh
+tailscale serve --bg --https=443 --set-path=/docs http://127.0.0.1:4000/docs
+tailscale serve status
+```
+
+On macOS, Webcode also discovers the CLI embedded in a standard
+`/Applications/Tailscale.app` installation. For other installation locations,
+put `tailscale` on `PATH` before running setup.
+
 ## URL and provisioning
 
 The canonical path is:
