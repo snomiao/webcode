@@ -45,7 +45,8 @@ export default defineConfig({
     hmr: process.env.WEBCODE_HMR === "1",
     proxy: {
       [`${appBase}_vscode/`]: {
-        target: "http://127.0.0.1:9999",
+        // Must match start.ts; override to run a second instance alongside.
+        target: `http://127.0.0.1:${process.env.WEBCODE_VSCODE_PORT || 9999}`,
         ws: true,
       },
       [`${appBase}_wtx/`]: {

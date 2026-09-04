@@ -51,6 +51,16 @@ bun run dev:direct
 
 This exposes the Vite shell at `http://localhost:3001`.
 
+Two differently mounted instances can run together by assigning distinct
+internal VS Code and terminal ports to one of them:
+
+```sh
+PORT=3101 WEBCODE_VSCODE_PORT=9998 TERMINAL_WS_PORT=3005 bun run dev:direct
+```
+
+This is useful when a `/webcode` Tailscale instance already uses the default
+ports while the root-mounted Portless instance should remain available.
+
 ## Run at boot (Windows) and CLI
 
 `bun link` puts a `webcode` command on your PATH:

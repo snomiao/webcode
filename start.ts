@@ -19,14 +19,17 @@ import { fileURLToPath } from "node:url";
 import { appBase } from "./server-base";
 
 const HERE = path.dirname(fileURLToPath(import.meta.url));
-const VSCODE_PORT = 9999;
+const VSCODE_PORT = Number(process.env.WEBCODE_VSCODE_PORT || 9999);
 const VSCODE_BASE = `${appBase}_vscode/`;
 const SHELL_PORT = Number(process.env.PORT || 3001);
 // `--dev` (or WEBCODE_DEV=1): vite dev server + HMR instead of the built shell.
 const DEV = process.argv.includes("--dev") || process.env.WEBCODE_DEV === "1";
 // Lab-local server data dir so we can pre-seed settings (and not pollute
 // the user's global ~/.vscode-server).
-const VSCODE_DATA_DIR = path.join(HERE, ".vscode-serve-web");
+const VSCODE_DATA_DIR = path.join(
+  HERE,
+  VSCODE_PORT === 9999 ? ".vscode-serve-web" : `.vscode-serve-web-${VSCODE_PORT}`,
+);
 // Opt-in Tailscale Serve: publish the shell on the tailnet at
 //   https://<machine>.<tailnet>.ts.net<appBase>
 // mounted at appBase so nothing else on the tailnet origin is claimed. Opt-in
