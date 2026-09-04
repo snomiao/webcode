@@ -1,3 +1,4 @@
+/// <reference types="vite/client" />
 /**
  * Client-side helper shared by the VS Code shell and the wtx terminal UI:
  * call the gateway's /api/repo endpoint to ensure the local worktree
@@ -28,6 +29,9 @@ export type ProvisionResult = {
   reason?: FailReason;
 };
 
+const BASE_PATH = import.meta.env.BASE_URL.replace(/\/$/, "");
+const atBase = (pathname: string) => `${BASE_PATH}${pathname}`;
+
 /**
  * Read a `/api/repo` response as JSON, but tolerate a non-JSON body (backend
  * down, an HTML error page, a truncated stream). Instead of throwing a raw
@@ -54,7 +58,7 @@ export async function provisionFromLocation(
   rel: string,
 ): Promise<ProvisionResult> {
   try {
-    const res = await fetch(`/api/repo/${rel}`);
+    const res = await fetch(atBase(`/api/repo/${rel}`));
     return await parseResult(res);
   } catch (e) {
     return {
@@ -75,7 +79,7 @@ export async function createBranchFromLocation(
   rel: string,
 ): Promise<ProvisionResult> {
   try {
-    const res = await fetch(`/api/repo/${rel}?create=1`, { method: "POST" });
+    const res = await fetch(atBase(`/api/repo/${rel}?create=1`), { method: "POST" });
     return await parseResult(res);
   } catch (e) {
     return {
@@ -130,7 +134,7 @@ export function watchStatus(
   rel: string,
   onEvent: (ev: LiveEvent) => void,
 ): () => void {
-  const es = new EventSource(`/api/watch/${rel}`);
+  const es = new EventSource(atBase(`/api/watch/${rel}`));
   es.onmessage = (e) => {
     try {
       // SSE carries a status per message; treat each as activity + status.

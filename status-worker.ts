@@ -1,3 +1,4 @@
+/// <reference types="vite/client" />
 /// <reference lib="webworker" />
 /**
  * SharedWorker: ONE WebSocket for the whole origin, multiplexing git-status
@@ -53,7 +54,8 @@ let reconnectTimer: ReturnType<typeof setTimeout> | null = null;
 
 function wsUrl(): string {
 // The worker's origin is the page origin; match ws/wss.
-  return location.origin.replace(/^http/, "ws") + "/api/watch-ws";
+  const basePath = import.meta.env.BASE_URL.replace(/\/$/, "");
+  return location.origin.replace(/^http/, "ws") + basePath + "/api/watch-ws";
 }
 
 function send(m: InMsg): void {

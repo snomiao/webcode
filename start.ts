@@ -16,11 +16,17 @@ import { fileURLToPath } from "node:url";
 
 const HERE = path.dirname(fileURLToPath(import.meta.url));
 const VSCODE_PORT = 9999;
-const VSCODE_BASE = "/_vscode/";
+const BASE_PATH = normalizeBasePath(process.env.WEB_CODE_BASE_PATH);
+const VSCODE_BASE = `${BASE_PATH}/_vscode/`.replace(/^\/\//, "/");
 const SHELL_PORT = Number(process.env.PORT || 3001);
 // Lab-local server data dir so we can pre-seed settings (and not pollute
 // the user's global ~/.vscode-server).
 const VSCODE_DATA_DIR = path.join(HERE, ".vscode-serve-web");
+
+function normalizeBasePath(value?: string): string {
+  if (!value || value === "/") return "";
+  return `/${value.replace(/^\/+|\/+$/g, "")}`;
+}
 
 // Each long-lived child is supervised: if it dies while we're still up
 // (e.g. vite gets SIGTERM'd, or VS Code's server crashes), we respawn it
@@ -163,7 +169,8 @@ async function main() {
   // Give the child services a moment to start before printing the URL.
   await new Promise((r) => setTimeout(r, 1500));
 
-  const base = process.env.PORTLESS_URL || `http://localhost:${SHELL_PORT}`;
+  const origin = process.env.PORTLESS_URL || `http://localhost:${SHELL_PORT}`;
+  const base = `${origin}${BASE_PATH}`;
   console.log(
     "[webcode] ready.\n" +
       `  VS Code : ${base}/github.com/<owner>/<repo>/tree/<branch>\n` +

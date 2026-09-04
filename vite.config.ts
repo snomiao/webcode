@@ -14,6 +14,21 @@ import {
 } from "./provision";
 
 const HERE = path.dirname(fileURLToPath(import.meta.url));
+const BASE_PATH = normalizeBasePath(process.env.WEB_CODE_BASE_PATH);
+const route = (pathname: string) => `${BASE_PATH}${pathname}`;
+
+/** Connect strips a middleware's mount path before calling its handler. */
+function pathBelowMount(pathname: string, mount: string): string {
+  const remainder = pathname.startsWith(mount)
+    ? pathname.slice(mount.length)
+    : pathname;
+  return remainder.replace(/^\/+/, "");
+}
+
+function normalizeBasePath(value?: string): string {
+  if (!value || value === "/") return "";
+  return `/${value.replace(/^\/+|\/+$/g, "")}`;
+}
 
 /**
  * The shell server (port 3001). It serves:
@@ -27,22 +42,27 @@ const HERE = path.dirname(fileURLToPath(import.meta.url));
  * `/api/`, `/__config`, VS Code, and wtx remain on one portless origin.
  */
 export default defineConfig({
+  base: `${BASE_PATH}/`.replace(/^\/\//, "/"),
   // Point vite's env-file loader at a dedicated empty dir so it never picks up
   // `.env` / `.env.local` (from this lab or the repo root). The shell server is
   // an embedded dev tool — it runs purely on the system/default process env,
   // and provisioned worktrees get their own `.env.local` via provision.ts.
   envDir: path.join(HERE, "no-env"),
   server: {
+    // Tailscale Serve only proxies HTTP backends on 127.0.0.1. Pinning the
+    // shell here also avoids localhost resolving to IPv6-only ::1 on macOS.
+    host: process.env.HOST || "127.0.0.1",
     port: 3001,
     strictPort: true,
     proxy: {
-      "/_vscode/": {
+      [route("/_vscode/")]: {
         target: "http://localhost:9999",
         ws: true,
       },
-      "/_wtx/": {
+      [route("/_wtx/")]: {
         target: "http://localhost:3004",
         ws: true,
+        rewrite: (pathname) => pathname.slice(BASE_PATH.length),
       },
     },
   },
@@ -69,7 +89,7 @@ export default defineConfig({
         const wss = new WebSocketServer({ noServer: true });
         server.httpServer?.on("upgrade", (req, socket, head) => {
           const { pathname } = new URL(req.url ?? "", "http://localhost");
-          if (pathname !== "/api/watch-ws") return; // leave vite HMR upgrades alone
+          if (pathname !== route("/api/watch-ws")) return; // leave vite HMR upgrades alone
           wss.handleUpgrade(req, socket, head, (ws) => handleWatchSocket(ws));
         });
 
@@ -113,7 +133,7 @@ export default defineConfig({
           ws.on("error", cleanup);
         }
 
-        server.middlewares.use("/__config", (_req, res) => {
+        server.middlewares.use(route("/__config"), (_req, res) => {
           res.setHeader("Content-Type", "application/json");
           // `wsRoot` is the absolute path to the workspace root, joined
           // server-side so the client never concatenates with "/" (which
@@ -131,7 +151,7 @@ export default defineConfig({
         // POST /api/repo/<owner>/<repo>/tree/<branch>?create=1 -> create the
         //   branch locally off the repo's default branch (no push), for when
         //   provision returned reason:"branch-not-found".
-        server.middlewares.use("/api/repo/", async (req, res) => {
+        server.middlewares.use(route("/api/repo/"), async (req, res) => {
           const json = (status: number, body: unknown) => {
             res.statusCode = status;
             res.setHeader("Content-Type", "application/json");
@@ -139,9 +159,8 @@ export default defineConfig({
           };
           try {
             const url = new URL(req.url ?? "", "http://localhost");
-            // The middleware sees the full path, so parse after "/api/repo/".
             const full = decodeURIComponent(url.pathname);
-            const specPath = full.replace(/^\/api\/repo\//, "");
+            const specPath = pathBelowMount(full, route("/api/repo/"));
             const spec = parseSpec(specPath);
             if (!spec) {
               return json(400, {
@@ -166,11 +185,11 @@ export default defineConfig({
         //   dirty/ahead/behind without polling. One `data: <GitStatus JSON>`
         //   per change, plus an initial snapshot and `: ping` heartbeats. The
         //   per-connection watcher is torn down when the client disconnects.
-        server.middlewares.use("/api/watch/", async (req, res) => {
+        server.middlewares.use(route("/api/watch/"), async (req, res) => {
           const url = new URL(req.url ?? "", "http://localhost");
-          const specPath = decodeURIComponent(url.pathname).replace(
-            /^\/api\/watch\//,
-            "",
+          const specPath = pathBelowMount(
+            decodeURIComponent(url.pathname),
+            route("/api/watch/"),
           );
           const spec = parseSpec(specPath);
           if (!spec) {
