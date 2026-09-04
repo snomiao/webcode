@@ -15,6 +15,8 @@ import {
 
 const HERE = path.dirname(fileURLToPath(import.meta.url));
 const BASE_PATH = normalizeBasePath(process.env.WEB_CODE_BASE_PATH);
+const VSCODE_PORT = Number(process.env.WEB_CODE_VSCODE_PORT || 9999);
+const TERMINAL_PORT = Number(process.env.WEB_CODE_TERMINAL_PORT || 3004);
 const route = (pathname: string) => `${BASE_PATH}${pathname}`;
 
 /** Connect strips a middleware's mount path before calling its handler. */
@@ -56,11 +58,11 @@ export default defineConfig({
     strictPort: true,
     proxy: {
       [route("/_vscode/")]: {
-        target: "http://localhost:9999",
+        target: `http://localhost:${VSCODE_PORT}`,
         ws: true,
       },
       [route("/_wtx/")]: {
-        target: "http://localhost:3004",
+        target: `http://localhost:${TERMINAL_PORT}`,
         ws: true,
         rewrite: (pathname) => pathname.slice(BASE_PATH.length),
       },
