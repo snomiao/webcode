@@ -16,7 +16,7 @@ export type GitStatus = {
   hasUpstream: boolean;
 };
 
-export type FailReason = "branch-not-found" | "repo-not-found" | "other";
+export type FailReason = "branch-not-found" | "repo-not-found" | "missing-git" | "other";
 
 export type ProvisionResult = {
   ok: boolean;
@@ -26,6 +26,7 @@ export type ProvisionResult = {
   git?: GitStatus;
   error?: string;
   reason?: FailReason;
+  backup?: string;
 };
 
 /**
@@ -52,9 +53,11 @@ async function parseResult(res: Response): Promise<ProvisionResult> {
 /** Provision the repo named by a `<owner>/<repo>/tree/<branch>` path. */
 export async function provisionFromLocation(
   rel: string,
+  recover = false,
 ): Promise<ProvisionResult> {
   try {
-    const res = await fetch(`/api/repo/${rel}`);
+    const res = await fetch(`/api/repo/${rel}${recover ? "?recover=1" : ""}`,
+      recover ? { method: "POST" } : undefined);
     return await parseResult(res);
   } catch (e) {
     return {

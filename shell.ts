@@ -100,6 +100,10 @@ async function main() {
   const result = await provisionFromLocation(rel);
 
   if (!result.ok) {
+    if (result.reason === "missing-git") {
+      offerRecovery(msg, frame, rel, result.folder);
+      return;
+    }
     // Remote repo exists but the branch doesn't yet → offer to create it
     // locally (branched off the default branch, no push).
     if (result.reason === "branch-not-found") {
@@ -345,6 +349,42 @@ function offerCreateBranch(
     liveTitle(rel);
     setStatus(msg, `${esc(statusNote(r, rel))}. Opening…`);
     openVscode(frame, msg, r.folder);
+  });
+}
+
+function offerRecovery(
+  msg: HTMLElement,
+  frame: HTMLIFrameElement,
+  rel: string,
+  folder: string,
+) {
+  setStatus(msg,
+    `<strong>Troubleshooting: incomplete checkout</strong>` +
+    `<p><code>${esc(folder)}</code> contains files, but its <code>.git</code> metadata is missing. It needs provisioning again to work as a Git checkout.</p>` +
+    `<p>Back up and provision again moves the existing folder to a unique sibling backup directory, then clones <code>${esc(rel)}</code>. Your existing files remain in the backup even if cloning fails.</p>` +
+    `<button id="recover">Back up and provision again</button> ` +
+    `<button id="open-existing">Open existing files</button>`);
+  msg.querySelector("#open-existing")?.addEventListener("click", () => {
+    setTitle(rel);
+    openVscode(frame, msg, folder);
+  });
+  msg.querySelector("#recover")?.addEventListener("click", async () => {
+    setStatus(msg, `Backing up existing files and provisioning <code>${esc(rel)}</code>…`);
+    const result = await provisionFromLocation(rel, true);
+    const backupNote = result.backup
+      ? `<p>Original files saved at <code>${esc(result.backup)}</code>.</p>`
+      : "";
+    if (!result.ok) {
+      setStatus(msg, `<strong>Provisioning could not finish</strong>${backupNote}<pre>${esc(result.error || "unknown error")}</pre>` +
+        `<p>Check the repository URL, branch, network connection, and GitHub access, then reload to retry.</p>`);
+      return;
+    }
+    setStatus(msg, `<strong>Checkout ready</strong>${backupNote}<button id="open-recovered">Open VS Code</button>`);
+    msg.querySelector("#open-recovered")?.addEventListener("click", () => {
+      setTitle(rel, result.git);
+      liveTitle(rel);
+      openVscode(frame, msg, result.folder);
+    });
   });
 }
 

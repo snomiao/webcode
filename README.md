@@ -11,6 +11,9 @@ webcode provisions the matching checkout under
 `~/ws/<owner>/<repo>/tree/<branch>`, then opens it in VS Code Web. Existing
 worktrees are fetched and only fast-forwarded when clean. Missing worktrees are
 cloned with submodules and their dependencies are installed automatically.
+Populated folders without Git metadata offer “Back up and provision again”.
+Recovery moves the original folder into a unique sibling backup directory, then
+clones a fresh checkout. The backup is retained even if cloning fails.
 
 Everything shares one HTTPS origin through
 [portless](https://github.com/vercel-labs/portless). Vite serves the shell and

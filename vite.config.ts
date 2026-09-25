@@ -153,7 +153,7 @@ export default defineConfig({
               req.method === "POST" && url.searchParams.get("create") === "1";
             const result = isCreate
               ? await createBranch(spec)
-              : await provision(spec);
+              : await provision(spec, req.method === "POST" && url.searchParams.get("recover") === "1");
             return json(result.ok ? 200 : 502, result);
           } catch (e) {
             return json(500, { ok: false, error: String(e) });

@@ -27,7 +27,7 @@
 import watcher from "@parcel/watcher";
 import { execFile } from "node:child_process";
 import { existsSync } from "node:fs";
-import { copyFile, mkdir } from "node:fs/promises";
+import { copyFile, mkdir, mkdtemp, readdir, rename } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
@@ -61,7 +61,7 @@ export type GitStatus = {
  *   - "repo-not-found": the remote repo itself is missing/inaccessible.
  *   - "other": anything else (network, auth, disk, …).
  */
-export type FailReason = "branch-not-found" | "repo-not-found" | "other";
+export type FailReason = "branch-not-found" | "repo-not-found" | "missing-git" | "other";
 
 export type ProvisionResult = {
   ok: boolean;
@@ -73,6 +73,7 @@ export type ProvisionResult = {
   git?: GitStatus;
   error?: string;
   reason?: FailReason;
+  backup?: string;
 };
 
 function classifyError(msg: string): FailReason {
@@ -365,7 +366,22 @@ async function seedEnvLocal(spec: RepoSpec, folder: string): Promise<void> {
  * Ensure the worktree for `spec` exists and is fresh. Never throws —
  * failures are returned as `{ ok:false, action:"error", error }`.
  */
-export async function provision(spec: RepoSpec): Promise<ProvisionResult> {
+const provisioning = new Map<string, Promise<ProvisionResult>>();
+
+export async function provision(spec: RepoSpec, recover = false): Promise<ProvisionResult> {
+  const folder = folderFor(spec);
+  const pending = provisioning.get(folder);
+  if (pending) return pending;
+  const task = provisionOnce(spec, recover);
+  provisioning.set(folder, task);
+  try {
+    return await task;
+  } finally {
+    provisioning.delete(folder);
+  }
+}
+
+async function provisionOnce(spec: RepoSpec, recover: boolean): Promise<ProvisionResult> {
   const folder = folderFor(spec);
   const base: Omit<ProvisionResult, "action"> & {
     action: ProvisionResult["action"];
@@ -379,6 +395,25 @@ export async function provision(spec: RepoSpec): Promise<ProvisionResult> {
 
   try {
     if (!base.existed) {
+      // Files alone don't mean provisioning succeeded. Preserve them before
+      // retrying, and only move them on an explicit recovery request.
+      const entries = await readdir(folder).catch((error: NodeJS.ErrnoException) => {
+        if (error.code === "ENOENT") return [];
+        throw error;
+      });
+      if (entries.length > 0) {
+        if (!recover) {
+          return {
+            ...base, ok: false, action: "error", reason: "missing-git",
+            error: "This folder contains files but has no .git metadata. Back up the folder and provision again to restore a Git checkout.",
+          };
+        }
+        const backupDir = await mkdtemp(`${folder}.backup-`);
+        const backup = path.join(backupDir, "workspace");
+        await rename(folder, backup);
+        base.backup = backup;
+      }
+
       // Clone this branch independently into the worktree path.
       await mkdir(path.dirname(folder), { recursive: true });
       const url = `https://github.com/${spec.owner}/${spec.repo}`;
