@@ -12,6 +12,8 @@
  * `~/<wsRoot>` so you can browse what's already checked out.
  */
 
+import { appPath, appRelativePath } from "./app-base";
+
 import {
   createBranchFromLocation,
   provisionFromLocation,
@@ -58,7 +60,7 @@ async function main() {
     // the repo path as `?repo=` so terminal.html is reached at a clean URL
     // (vite's SPA fallback otherwise wouldn't serve it under a repo path).
     const rel = repoPathFromLocation();
-    location.replace(`/terminal.html?repo=${encodeURIComponent(rel)}`);
+    location.replace(appPath(`terminal.html?repo=${encodeURIComponent(rel)}`));
     return;
   }
 
@@ -73,11 +75,11 @@ async function main() {
   // bootstrap (blank editor, empty tree). The cookie rides the iframe's
   // own request so the editor sees `en` before computing the NLS URL.
   localStorage.setItem("vscode.nls.locale", "en");
-  document.cookie = "vscode.nls.locale=en;path=/;max-age=3153600000";
+  document.cookie = `vscode.nls.locale=en;path=${appPath()};max-age=3153600000`;
 
   let cfg: Config;
   try {
-    cfg = await (await fetch("/__config")).json();
+    cfg = await (await fetch(appPath("__config"))).json();
   } catch (e) {
     setStatus(msg, `Could not load /__config: ${e}`);
     return;
@@ -132,7 +134,7 @@ async function main() {
 
 /** Accept both /github.com/<owner>/... and the legacy /<owner>/... shape. */
 function repoPathFromLocation(): string {
-  return decodeURIComponent(location.pathname.replace(/^\/+/, "")).replace(
+  return decodeURIComponent(appRelativePath(location.pathname)).replace(
     /^github\.com\/+/,
     "",
   );
@@ -393,7 +395,7 @@ function openVscode(
   msg: HTMLElement,
   folder: string,
 ) {
-  frame.src = `/_vscode/?folder=${encodeURIComponent(folder)}`;
+  frame.src = appPath(`_vscode/?folder=${encodeURIComponent(folder)}`);
   frame.hidden = false;
   frame.addEventListener("load", () => (msg.hidden = true), { once: true });
 }

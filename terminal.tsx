@@ -8,6 +8,8 @@
  * exist and be fresh.
  */
 
+import { appPath } from "./app-base";
+
 import "@xterm/xterm/css/xterm.css";
 import { StrictMode } from "react";
 import { createRoot } from "react-dom/client";
@@ -20,7 +22,7 @@ async function main() {
 
   let cfg: Config;
   try {
-    cfg = await (await fetch("/__config")).json();
+    cfg = await (await fetch(appPath("__config"))).json();
   } catch (e) {
     status.textContent = `Could not load /__config: ${e}`;
     return;
@@ -45,7 +47,7 @@ async function main() {
   status.hidden = true;
   root.render(
     <StrictMode>
-      <WTx wsUrl="/_wtx/" cwd={cwd} />
+      <WTx wsUrl={appPath("_wtx/")} cwd={cwd} />
     </StrictMode>,
   );
 }

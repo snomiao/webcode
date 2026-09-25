@@ -69,3 +69,25 @@ it is clean, has an upstream, is behind, and is not ahead; otherwise webcode
 fetches and leaves integration to you.
 
 Append `?ui=wtx` for a PTY-backed web terminal in the same worktree.
+
+## Tailscale prefix
+
+Start Webcode with a matching base path and allow only your machine’s hostname:
+
+```sh
+export WEBCODE_BASE_PATH=/webcode
+export __VITE_ADDITIONAL_SERVER_ALLOWED_HOSTS="$(tailscale status --json | bun -e 'console.log((await Bun.stdin.json()).Self.DNSName.replace(/\.$/, ""))')"
+bun run dev:direct
+```
+
+In another terminal, add the private route without replacing other apps:
+
+```sh
+tailscale serve --bg --https=443 --set-path=/webcode http://127.0.0.1:3001/webcode
+```
+
+Open `https://<machine>.<tailnet>.ts.net/webcode/`, optionally followed by
+`github.com/<owner>/<repo>/tree/<branch>` or `?ui=wtx`.
+The proxy target includes `/webcode` to restore the prefix stripped by Serve.
+`WEBCODE_BASE_PATH` defaults to `/` for local use. The Serve route persists;
+keep the Webcode process running separately.

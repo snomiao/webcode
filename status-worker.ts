@@ -17,6 +17,8 @@
  *     sends a fresh snapshot on (re)subscribe, state is self-healing.
  */
 
+import { appPath } from "./app-base";
+
 type GitStatus = {
   branch: string;
   head: string;
@@ -53,7 +55,7 @@ let reconnectTimer: ReturnType<typeof setTimeout> | null = null;
 
 function wsUrl(): string {
 // The worker's origin is the page origin; match ws/wss.
-  return location.origin.replace(/^http/, "ws") + "/api/watch-ws";
+  return location.origin.replace(/^http/, "ws") + appPath("api/watch-ws");
 }
 
 function send(m: InMsg): void {

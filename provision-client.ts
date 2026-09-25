@@ -4,6 +4,8 @@
  * exists (clone/fetch/pull), and report the result.
  */
 
+import { appPath } from "./app-base";
+
 /** `wsRoot` is the absolute workspace-root path (server-joined). */
 export type Config = { home: string; wsRoot: string };
 
@@ -56,7 +58,7 @@ export async function provisionFromLocation(
   recover = false,
 ): Promise<ProvisionResult> {
   try {
-    const res = await fetch(`/api/repo/${rel}${recover ? "?recover=1" : ""}`,
+    const res = await fetch(appPath(`api/repo/${rel}${recover ? "?recover=1" : ""}`),
       recover ? { method: "POST" } : undefined);
     return await parseResult(res);
   } catch (e) {
@@ -78,7 +80,7 @@ export async function createBranchFromLocation(
   rel: string,
 ): Promise<ProvisionResult> {
   try {
-    const res = await fetch(`/api/repo/${rel}?create=1`, { method: "POST" });
+    const res = await fetch(appPath(`api/repo/${rel}?create=1`), { method: "POST" });
     return await parseResult(res);
   } catch (e) {
     return {
@@ -133,7 +135,7 @@ export function watchStatus(
   rel: string,
   onEvent: (ev: LiveEvent) => void,
 ): () => void {
-  const es = new EventSource(`/api/watch/${rel}`);
+  const es = new EventSource(appPath(`api/watch/${rel}`));
   es.onmessage = (e) => {
     try {
       // SSE carries a status per message; treat each as activity + status.

@@ -14,9 +14,11 @@ import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 
+import { appBase } from "./server-base";
+
 const HERE = path.dirname(fileURLToPath(import.meta.url));
 const VSCODE_PORT = 9999;
-const VSCODE_BASE = "/_vscode/";
+const VSCODE_BASE = `${appBase}_vscode/`;
 const SHELL_PORT = Number(process.env.PORT || 3001);
 // Lab-local server data dir so we can pre-seed settings (and not pollute
 // the user's global ~/.vscode-server).
@@ -141,8 +143,8 @@ async function main() {
   seedVscodeSettings();
   const { cmd: codeServerBin, legacy } = findCodeServer();
   const codeServerArgs = legacy
-    ? ["serve-web", "--port", String(VSCODE_PORT), "--server-base-path", VSCODE_BASE, "--server-data-dir", VSCODE_DATA_DIR, "--without-connection-token", "--accept-server-license-terms"]
-    : ["--port", String(VSCODE_PORT), "--server-base-path", VSCODE_BASE, "--server-data-dir", VSCODE_DATA_DIR, "--without-connection-token", "--accept-server-license-terms"];
+    ? ["serve-web", "--host", "127.0.0.1", "--port", String(VSCODE_PORT), "--server-base-path", VSCODE_BASE, "--server-data-dir", VSCODE_DATA_DIR, "--without-connection-token", "--accept-server-license-terms"]
+    : ["--host", "127.0.0.1", "--port", String(VSCODE_PORT), "--server-base-path", VSCODE_BASE, "--server-data-dir", VSCODE_DATA_DIR, "--without-connection-token", "--accept-server-license-terms"];
   supervise(
     codeServerBin,
     codeServerArgs,
@@ -153,7 +155,7 @@ async function main() {
   // needs one named route).
   supervise(
     "bunx",
-    ["vite", "--port", String(SHELL_PORT), "--strictPort"],
+    ["vite", "--host", "127.0.0.1", "--port", String(SHELL_PORT), "--strictPort"],
     "vite shell",
   );
 
@@ -166,8 +168,8 @@ async function main() {
   const base = process.env.PORTLESS_URL || `http://localhost:${SHELL_PORT}`;
   console.log(
     "[webcode] ready.\n" +
-      `  VS Code : ${base}/github.com/<owner>/<repo>/tree/<branch>\n` +
-      `  Terminal: ${base}/github.com/<owner>/<repo>/tree/<branch>?ui=wtx`,
+      `  VS Code : ${base}${appBase}github.com/<owner>/<repo>/tree/<branch>\n` +
+      `  Terminal: ${base}${appBase}github.com/<owner>/<repo>/tree/<branch>?ui=wtx`,
   );
 
   // 4. cleanup on exit

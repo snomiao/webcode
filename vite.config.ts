@@ -1,3 +1,4 @@
+import { appBase } from "./server-base";
 import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
@@ -27,21 +28,23 @@ const HERE = path.dirname(fileURLToPath(import.meta.url));
  * `/api/`, `/__config`, VS Code, and wtx remain on one portless origin.
  */
 export default defineConfig({
+  base: appBase,
   // Point vite's env-file loader at a dedicated empty dir so it never picks up
   // `.env` / `.env.local` (from this lab or the repo root). The shell server is
   // an embedded dev tool — it runs purely on the system/default process env,
   // and provisioned worktrees get their own `.env.local` via provision.ts.
   envDir: path.join(HERE, "no-env"),
   server: {
+    host: "127.0.0.1",
     port: 3001,
     strictPort: true,
     proxy: {
-      "/_vscode/": {
-        target: "http://localhost:9999",
+      [`${appBase}_vscode/`]: {
+        target: "http://127.0.0.1:9999",
         ws: true,
       },
-      "/_wtx/": {
-        target: "http://localhost:3004",
+      [`${appBase}_wtx/`]: {
+        target: "http://127.0.0.1:3004",
         ws: true,
       },
     },
@@ -69,7 +72,7 @@ export default defineConfig({
         const wss = new WebSocketServer({ noServer: true });
         server.httpServer?.on("upgrade", (req, socket, head) => {
           const { pathname } = new URL(req.url ?? "", "http://localhost");
-          if (pathname !== "/api/watch-ws") return; // leave vite HMR upgrades alone
+          if (pathname !== `${appBase}api/watch-ws`) return; // leave vite HMR upgrades alone
           wss.handleUpgrade(req, socket, head, (ws) => handleWatchSocket(ws));
         });
 
@@ -113,7 +116,7 @@ export default defineConfig({
           ws.on("error", cleanup);
         }
 
-        server.middlewares.use("/__config", (_req, res) => {
+        server.middlewares.use(`${appBase}__config`, (_req, res) => {
           res.setHeader("Content-Type", "application/json");
           // `wsRoot` is the absolute path to the workspace root, joined
           // server-side so the client never concatenates with "/" (which
@@ -131,7 +134,7 @@ export default defineConfig({
         // POST /api/repo/<owner>/<repo>/tree/<branch>?create=1 -> create the
         //   branch locally off the repo's default branch (no push), for when
         //   provision returned reason:"branch-not-found".
-        server.middlewares.use("/api/repo/", async (req, res) => {
+        server.middlewares.use(`${appBase}api/repo/`, async (req, res) => {
           const json = (status: number, body: unknown) => {
             res.statusCode = status;
             res.setHeader("Content-Type", "application/json");
@@ -166,7 +169,7 @@ export default defineConfig({
         //   dirty/ahead/behind without polling. One `data: <GitStatus JSON>`
         //   per change, plus an initial snapshot and `: ping` heartbeats. The
         //   per-connection watcher is torn down when the client disconnects.
-        server.middlewares.use("/api/watch/", async (req, res) => {
+        server.middlewares.use(`${appBase}api/watch/`, async (req, res) => {
           const url = new URL(req.url ?? "", "http://localhost");
           const specPath = decodeURIComponent(url.pathname).replace(
             /^\/api\/watch\//,
