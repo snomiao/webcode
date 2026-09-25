@@ -16,6 +16,7 @@ import { appPath, appRelativePath } from "./app-base";
 
 import {
   createBranchFromLocation,
+  progressView,
   provisionFromLocation,
   statusNote,
   watchStatusLive,
@@ -48,14 +49,16 @@ function esc(s: string): string {
   );
 }
 
+// UI selector: `?ui=both` (the default) shows the web terminal and VS Code
+// side by side, `?ui=vscode` only VS Code, `?ui=wtx` only the terminal.
+const UI = new URLSearchParams(location.search).get("ui") || "both";
+const SPLIT = UI === "both";
+
 async function main() {
-  // UI selector: `?ui=wtx` opens the web terminal, anything else (or
-  // `?ui=vscode`) opens VS Code. The terminal lives on its own page
-  // (terminal.html, a React/xterm bundle) to keep the VS Code path a
-  // dependency-free iframe shell; route there preserving the repo path
-  // and remaining query so the same /api/repo provisioning applies.
-  const ui = new URLSearchParams(location.search).get("ui");
-  if (ui === "wtx") {
+  // The terminal lives on its own page (terminal.html, a React/xterm bundle)
+  // to keep the VS Code path a dependency-free iframe shell; `?ui=wtx` routes
+  // there preserving the repo path so the same /api/repo provisioning applies.
+  if (UI === "wtx") {
     // Hand off to the terminal page (a separate React/xterm bundle), passing
     // the repo path as `?repo=` so terminal.html is reached at a clean URL
     // (vite's SPA fallback otherwise wouldn't serve it under a repo path).
@@ -98,8 +101,9 @@ async function main() {
   }
 
   // Provision the repo via the API, surfacing progress + git status.
-  setStatus(msg, `Provisioning <code>${esc(rel)}</code>…`);
-  const result = await provisionFromLocation(rel);
+  const view = progressView(msg, rel);
+  const result = await provisionFromLocation(rel, false, view.update);
+  view.stop();
 
   if (!result.ok) {
     if (result.reason === "missing-git") {
@@ -132,7 +136,9 @@ async function main() {
   openVscode(frame, msg, result.folder);
 }
 
-/** Accept both /github.com/<owner>/... and the legacy /<owner>/... shape. */
+/**
+ * Accept both /github.com/<owner>/... and the legacy /<owner>/... shape.
+ */
 function repoPathFromLocation(): string {
   return decodeURIComponent(appRelativePath(location.pathname)).replace(
     /^github\.com\/+/,
@@ -354,6 +360,15 @@ function offerCreateBranch(
   });
 }
 
+// VS Code Web's `?folder=` is a URI path, so a Windows path like
+// `C:\Users\me\ws` must become `/c:/Users/me/ws`; otherwise the workbench
+// can't resolve a filesystem provider for it. POSIX paths pass through.
+function toVscodePath(folder: string): string {
+  const p = folder.replace(/\\/g, "/");
+  const drive = /^([A-Za-z]):\//.exec(p);
+  return drive ? `/${drive[1].toLowerCase()}:${p.slice(2)}` : p;
+}
+
 function offerRecovery(
   msg: HTMLElement,
   frame: HTMLIFrameElement,
@@ -371,8 +386,9 @@ function offerRecovery(
     openVscode(frame, msg, folder);
   });
   msg.querySelector("#recover")?.addEventListener("click", async () => {
-    setStatus(msg, `Backing up existing files and provisioning <code>${esc(rel)}</code>…`);
-    const result = await provisionFromLocation(rel, true);
+    const view = progressView(msg, rel);
+    const result = await provisionFromLocation(rel, true, view.update);
+    view.stop();
     const backupNote = result.backup
       ? `<p>Original files saved at <code>${esc(result.backup)}</code>.</p>`
       : "";
@@ -395,9 +411,75 @@ function openVscode(
   msg: HTMLElement,
   folder: string,
 ) {
-  frame.src = appPath(`_vscode/?folder=${encodeURIComponent(folder)}`);
+  frame.src = appPath(`_vscode/?folder=${encodeURIComponent(toVscodePath(folder))}`);
   frame.hidden = false;
   frame.addEventListener("load", () => (msg.hidden = true), { once: true });
+  if (SPLIT) openTerminal();
+}
+
+const SPLIT_KEY = "webcode.split";
+const SPLIT_DEFAULT = 40;
+
+/**
+ * Split mode: load the terminal page into the left pane and wire the divider.
+ * Called once provisioning has settled, so terminal.html's own provisioning
+ * call finds an existing worktree instead of racing a second clone.
+ */
+function openTerminal() {
+  const term = document.getElementById("term") as HTMLIFrameElement;
+  const divider = document.getElementById("divider") as HTMLDivElement;
+  if (!term.hidden) return;
+  const rel = repoPathFromLocation();
+  term.src = appPath(`terminal.html${rel ? `?repo=${encodeURIComponent(rel)}` : ""}`);
+  term.hidden = false;
+  divider.hidden = false;
+
+  const panes = document.getElementById("panes") as HTMLDivElement;
+  const setSplit = (pct: number) => {
+    const clamped = Math.min(90, Math.max(10, pct));
+    panes.style.setProperty("--split", `${clamped}%`);
+    return clamped;
+  };
+  let saved = SPLIT_DEFAULT;
+  try {
+    saved = Number(localStorage.getItem(SPLIT_KEY)) || SPLIT_DEFAULT;
+  } catch {
+    /* storage unavailable — use the default */
+  }
+  setSplit(saved);
+
+  const save = (pct: number) => {
+    try {
+      localStorage.setItem(SPLIT_KEY, String(Math.round(pct * 10) / 10));
+    } catch {
+      /* ignore */
+    }
+  };
+  divider.addEventListener("pointerdown", (e) => {
+    e.preventDefault();
+    divider.setPointerCapture(e.pointerId);
+    document.body.classList.add("dragging");
+    const rect = panes.getBoundingClientRect();
+    let pct = saved;
+    const onMove = (ev: PointerEvent) => {
+      pct = setSplit(((ev.clientX - rect.left) / rect.width) * 100);
+    };
+    const onUp = () => {
+      document.body.classList.remove("dragging");
+      divider.removeEventListener("pointermove", onMove);
+      divider.removeEventListener("pointerup", onUp);
+      divider.removeEventListener("pointercancel", onUp);
+      saved = pct;
+      save(pct);
+    };
+    divider.addEventListener("pointermove", onMove);
+    divider.addEventListener("pointerup", onUp);
+    divider.addEventListener("pointercancel", onUp);
+  });
+  divider.addEventListener("dblclick", () => {
+    saved = setSplit(SPLIT_DEFAULT);
+    save(saved);
+  });
 }
 
 main();

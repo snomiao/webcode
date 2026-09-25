@@ -3,12 +3,17 @@
   "private": true,
   "type": "module",
   "description": "Open GitHub repositories locally in browser VS Code or a web terminal",
+  "bin": {
+    "webcode": "./cli.ts"
+  },
   "scripts": {
-    "dev": "portless webcode bun start.ts",
-    "dev:direct": "bun run start.ts",
+    "postinstall": "cd lib/wtx && bun install",
+    "start": "portless webcode bun start.ts",
+    "dev": "portless webcode bun start.ts --dev",
+    "dev:direct": "bun run start.ts --dev",
     "shell": "vite --port 3001 --strictPort",
     "build": "vite build",
-    "typecheck": "tsc --noEmit --moduleResolution bundler --module preserve --target es2022 --jsx react-jsx --skipLibCheck start.ts vite.config.ts shell.ts terminal.tsx provision.ts provision-client.ts"
+    "typecheck": "tsc --noEmit --moduleResolution bundler --module preserve --target es2022 --jsx react-jsx --skipLibCheck vite-env.d.ts cli.ts start.ts vite.config.ts shell.ts terminal.tsx provision.ts provision-client.ts"
   },
   "devDependencies": {
     "@types/react": "^18",

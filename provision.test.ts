@@ -26,7 +26,7 @@ async function provisionAt(home: string, recover = false) {
   const { stdout } = await execFileP(process.execPath, ["-e", `
     const { provision } = await import(${JSON.stringify(moduleUrl)});
     console.log(JSON.stringify(await provision({ owner: "owner", repo: "repo", branch: "main" }, ${recover})));
-  `], { env: { ...process.env, HOME: home } });
+  `], { env: { ...process.env, HOME: home, USERPROFILE: home } }); // os.homedir() reads USERPROFILE on Windows
   return JSON.parse(stdout);
 }
 
@@ -48,7 +48,8 @@ async function localRemote(home: string, branch: string) {
   await git(["init", "-b", branch]);
   await git(["-c", "user.name=Test", "-c", "user.email=test@example.invalid", "commit", "--allow-empty", "-m", "Initial"]);
   await writeFile(path.join(home, ".gitconfig"),
-    `[url "${remote}"]\n\tinsteadOf = https://github.com/owner/repo\n`);
+    // Forward slashes: git config treats backslashes as escapes (Windows paths).
+    `[url "${remote.replace(/\\/g, "/")}"]\n\tinsteadOf = https://github.com/owner/repo\n`);
 }
 
 test("recovery preserves the original files in a backup and clones a real checkout", async () => {

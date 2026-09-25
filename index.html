@@ -13,11 +13,54 @@
         color: #ccc;
         font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
       }
-      #frame {
-        border: 0;
+      [hidden] {
+        display: none !important;
+      }
+      /* ?ui=both (default): terminal | divider | VS Code. --split is the
+         terminal pane's width, set by shell.ts from the divider drag. */
+      #panes {
+        display: flex;
         width: 100vw;
         height: 100vh;
+      }
+      #panes iframe {
+        border: 0;
+        height: 100%;
         display: block;
+        min-width: 0;
+      }
+      #term {
+        flex: 0 0 var(--split, 40%);
+      }
+      #frame {
+        flex: 1 1 0;
+      }
+      #divider {
+        flex: 0 0 5px;
+        cursor: col-resize;
+        background: #2b2b2b;
+        touch-action: none;
+        position: relative;
+        z-index: 1;
+      }
+      /* Invisible 17px grab zone overlapping both panes; the visible bar
+         stays 5px. */
+      #divider::before {
+        content: "";
+        position: absolute;
+        inset: 0 -6px;
+      }
+      #divider:hover,
+      body.dragging #divider {
+        background: #007acc;
+      }
+      /* Iframes would swallow pointer events mid-drag. */
+      body.dragging iframe {
+        pointer-events: none;
+      }
+      body.dragging {
+        cursor: col-resize;
+        user-select: none;
       }
       #msg {
         padding: 2rem;
@@ -32,7 +75,11 @@
   </head>
   <body>
     <div id="msg">Loading VS Code…</div>
-    <iframe id="frame" hidden></iframe>
+    <div id="panes">
+      <iframe id="term" hidden></iframe>
+      <div id="divider" hidden title="Drag to resize · double-click to reset"></div>
+      <iframe id="frame" hidden></iframe>
+    </div>
     <script type="module" src="/shell.ts"></script>
   </body>
 </html>

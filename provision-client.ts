@@ -52,15 +52,61 @@ async function parseResult(res: Response): Promise<ProvisionResult> {
   }
 }
 
-/** Provision the repo named by a `<owner>/<repo>/tree/<branch>` path. */
+/** Clone/setup progress streamed by the server (secrets already redacted). */
+export type ProvisionProgress = {
+  phase: "clone" | "setup";
+  text: string;
+  percent?: number;
+};
+
+/**
+ * Provision the repo named by a `<owner>/<repo>/tree/<branch>` path. With
+ * `onProgress`, asks for the NDJSON stream so a long clone/install reports
+ * as it goes instead of looking hung. `recover` backs up a populated folder
+ * that has no `.git` and provisions again.
+ */
 export async function provisionFromLocation(
   rel: string,
   recover = false,
+  onProgress?: (p: ProvisionProgress) => void,
 ): Promise<ProvisionResult> {
   try {
-    const res = await fetch(appPath(`api/repo/${rel}${recover ? "?recover=1" : ""}`),
-      recover ? { method: "POST" } : undefined);
-    return await parseResult(res);
+    const params = new URLSearchParams();
+    if (recover) params.set("recover", "1");
+    if (onProgress) params.set("stream", "1");
+    const qs = params.size ? `?${params}` : "";
+    const res = await fetch(
+      appPath(`api/repo/${rel}${qs}`),
+      recover ? { method: "POST" } : undefined,
+    );
+    const ndjson = res.headers.get("content-type")?.includes("ndjson");
+    if (!onProgress || !ndjson || !res.body) return await parseResult(res);
+
+    const reader = res.body.pipeThrough(new TextDecoderStream()).getReader();
+    let buf = "";
+    for (;;) {
+      const { value, done } = await reader.read();
+      if (done) break;
+      buf += value;
+      const lines = buf.split("\n");
+      buf = lines.pop()!;
+      for (const l of lines) {
+        if (!l.trim()) continue;
+        const m = JSON.parse(l) as
+          | ({ type: "progress" } & ProvisionProgress)
+          | { type: "result"; result: ProvisionResult }
+          | { type: "ping" };
+        if (m.type === "result") return m.result;
+        if (m.type === "progress") onProgress(m);
+      }
+    }
+    return {
+      ok: false,
+      folder: "",
+      existed: false,
+      action: "error",
+      error: "provisioning stream ended without a result",
+    };
   } catch (e) {
     return {
       ok: false,
@@ -91,6 +137,57 @@ export async function createBranchFromLocation(
       error: String(e),
     };
   }
+}
+
+const PHASE_LABEL: Record<ProvisionProgress["phase"], string> = {
+  clone: "Cloning",
+  setup: "Installing dependencies",
+};
+
+/**
+ * Render a provisioning progress panel into `el`: phase, elapsed time, a bar
+ * (determinate when git reports a percent, indeterminate otherwise) and the
+ * latest output line. Returns `update` for each progress event and `stop` to
+ * end the elapsed-time ticker. Built with textContent only — output lines are
+ * never interpreted as HTML.
+ */
+export function progressView(el: HTMLElement, rel: string) {
+  el.replaceChildren();
+  el.hidden = false;
+  const head = document.createElement("div");
+  const title = document.createElement("span");
+  title.textContent = `Provisioning ${rel}`;
+  const elapsed = document.createElement("span");
+  elapsed.style.cssText = "opacity:.6;margin-left:.5em";
+  head.append(title, elapsed);
+  const bar = document.createElement("progress");
+  bar.style.cssText = "width:min(560px,100%);display:block;margin:.5rem 0";
+  const phase = document.createElement("div");
+  phase.style.cssText = "font-size:.9em";
+  const line = document.createElement("pre");
+  line.style.cssText =
+    "margin:.25rem 0;opacity:.6;font-size:.85em;white-space:pre-wrap;word-break:break-all;max-width:min(560px,100%)";
+  el.append(head, bar, phase, line);
+
+  const started = Date.now();
+  const tick = () => {
+    const s = Math.floor((Date.now() - started) / 1000);
+    elapsed.textContent = s < 60 ? `${s}s` : `${Math.floor(s / 60)}m ${s % 60}s`;
+  };
+  tick();
+  const timer = setInterval(tick, 1000);
+
+  return {
+    update(p: ProvisionProgress) {
+      phase.textContent = PHASE_LABEL[p.phase];
+      line.textContent = p.text;
+      if (p.percent != null) bar.value = p.percent / 100;
+      else bar.removeAttribute("value"); // indeterminate
+    },
+    stop() {
+      clearInterval(timer);
+    },
+  };
 }
 
 /** Short human-readable git-state note for status lines. */

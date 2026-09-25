@@ -25,7 +25,7 @@
  */
 
 import watcher from "@parcel/watcher";
-import { execFile } from "node:child_process";
+import { execFile, spawn } from "node:child_process";
 import { existsSync } from "node:fs";
 import { copyFile, mkdir, mkdtemp, readdir, rename } from "node:fs/promises";
 import os from "node:os";
@@ -76,6 +76,48 @@ export type ProvisionResult = {
   backup?: string;
 };
 
+/**
+ * A provisioning progress update, streamed to the client while a clone or
+ * setup runs. `text` is the latest output line; `percent` is set only when
+ * the tool reports one (git's `Receiving objects:  45% (…)`), so the UI can
+ * fall back to an indeterminate bar.
+ */
+export type ProvisionProgress = {
+  phase: "clone" | "setup";
+  text: string;
+  percent?: number;
+};
+
+// Credential shapes that can surface in git/install output (auth'd remote
+// URLs, tokens echoed by a failing install, env dumps). Everything streamed or
+// returned to the browser goes through `redact` first.
+const SECRET_PATTERNS: [RegExp, string][] = [
+  // userinfo in URLs: https://user:token@host, https://token@host
+  [/(\b[a-z][\w+.-]*:\/\/)[^\s/@]+@/gi, "$1***@"],
+  // GitHub, npm, Slack, OpenAI/Anthropic-style, AWS, GitLab tokens
+  [/\b(gh[pousr]_|github_pat_)[A-Za-z0-9_]{16,}/g, "$1***"],
+  [/\bnpm_[A-Za-z0-9]{20,}/g, "npm_***"],
+  [/\bxox[abposr]-[A-Za-z0-9-]{10,}/g, "xox*-***"],
+  [/\bsk-[A-Za-z0-9_-]{16,}/g, "sk-***"],
+  [/\b(AKIA|ASIA)[A-Z0-9]{16}\b/g, "$1***"],
+  [/\bglpat-[A-Za-z0-9_-]{16,}/g, "glpat-***"],
+  // JWTs
+  [/\beyJ[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]{8,}/g, "***.jwt"],
+  // Authorization headers
+  [/\b(authorization:\s*(?:bearer|basic|token)\s+)\S+/gi, "$1***"],
+  [/\b(bearer\s+)[A-Za-z0-9._~+/=-]{12,}/gi, "$1***"],
+  // key=value / key: value where the key looks secret-ish
+  [
+    /\b([\w.-]*(?:token|secret|passw(?:or)?d|api[_-]?key|auth|credential|private[_-]?key)[\w.-]*\s*[=:]\s*)(["']?)[^\s"']+\2/gi,
+    "$1$2***$2",
+  ],
+];
+
+export function redact(s: string): string {
+  for (const [re, rep] of SECRET_PATTERNS) s = s.replace(re, rep);
+  return s;
+}
+
 function classifyError(msg: string): FailReason {
   if (/remote branch .* not found/i.test(msg)) return "branch-not-found";
   if (/repository .* not found|could not read from remote/i.test(msg))
@@ -124,6 +166,65 @@ async function git(
     // affordance). LC_ALL=C is load-bearing here — gettext ignores LANGUAGE
     // once the locale resolves to C. `env` replaces (not merges), so spread.
     env: { ...process.env, LC_ALL: "C", LANG: "C", LANGUAGE: "C" },
+  });
+}
+
+// git's in-place progress redraws, e.g. `Receiving objects:  45% (450/1000)`.
+const PROGRESS_RE = /^(remote: )?[\w ]+:\s+(\d{1,3})%/;
+
+/**
+ * Like `execFile`, but streams stdout/stderr to `onLine` line by line (git's
+ * `\r` progress redraws count as lines) instead of buffering until exit.
+ * Resolves with the non-progress stderr; rejects like execFile
+ * (`{ message, stderr }`) on a non-zero exit or timeout.
+ */
+function runStreaming(
+  cmd: string,
+  args: string[],
+  opts: { cwd: string; timeout: number; env?: NodeJS.ProcessEnv },
+  onLine: (line: string) => void,
+): Promise<{ stderr: string }> {
+  return new Promise((resolve, reject) => {
+    const child = spawn(cmd, args, {
+      cwd: opts.cwd,
+      env: opts.env,
+      stdio: ["ignore", "pipe", "pipe"],
+      windowsHide: true,
+    });
+    const kept: string[] = []; // stderr minus progress noise, for errors
+    const handle = (line: string, isErr: boolean) => {
+      const t = line.trimEnd();
+      if (!t) return;
+      onLine(t);
+      if (isErr && !PROGRESS_RE.test(t)) {
+        kept.push(t);
+        if (kept.length > 200) kept.shift();
+      }
+    };
+    const feed = (stream: NodeJS.ReadableStream, isErr: boolean) => {
+      let buf = "";
+      stream.setEncoding("utf8");
+      stream.on("data", (chunk: string) => {
+        buf += chunk;
+        const parts = buf.split(/\r\n|\r|\n/);
+        buf = parts.pop()!;
+        for (const l of parts) handle(l, isErr);
+      });
+      stream.on("end", () => buf && handle(buf, isErr));
+    };
+    feed(child.stdout!, false);
+    feed(child.stderr!, true);
+    const timer = setTimeout(() => child.kill(), opts.timeout);
+    child.on("error", (e) => {
+      clearTimeout(timer);
+      reject(e);
+    });
+    child.on("close", (code, signal) => {
+      clearTimeout(timer);
+      const stderr = kept.join("\n");
+      if (code === 0) resolve({ stderr });
+      else reject({ message: `${cmd} exited with ${signal ?? code}`, stderr });
+    });
   });
 }
 
@@ -302,13 +403,17 @@ export async function watchStatus(
  * slow install must not fail provisioning — the editor still opens and the
  * user can re-run setup from the integrated terminal.
  */
-async function runRepoSetup(dir: string): Promise<void> {
+async function runRepoSetup(
+  dir: string,
+  onLine: (line: string) => void = () => {},
+): Promise<void> {
   try {
-    await execFileP("bun", [SETUP_SCRIPT], {
-      cwd: dir,
-      timeout: SETUP_TIMEOUT_MS,
-      maxBuffer: 64 * 1024 * 1024,
-    });
+    await runStreaming(
+      "bun",
+      [SETUP_SCRIPT],
+      { cwd: dir, timeout: SETUP_TIMEOUT_MS },
+      onLine,
+    );
   } catch {
     // best-effort
   }
@@ -362,27 +467,80 @@ async function seedEnvLocal(spec: RepoSpec, folder: string): Promise<void> {
   }
 }
 
+type ProvisionJob = {
+  promise: Promise<ProvisionResult>;
+  listeners: Set<(p: ProvisionProgress) => void>;
+  last?: ProvisionProgress;
+};
+// In-flight provisions by worktree folder: a second tab opening the same repo
+// mid-clone joins the running job (and its progress) instead of racing a
+// second clone into the same directory.
+const jobs = new Map<string, ProvisionJob>();
+const PROGRESS_THROTTLE_MS = 150;
+
 /**
  * Ensure the worktree for `spec` exists and is fresh. Never throws —
  * failures are returned as `{ ok:false, action:"error", error }`.
+ * `recover` backs up a populated folder that lacks `.git` before cloning.
+ * `onProgress` receives clone/setup output while a fresh clone runs.
  */
-const provisioning = new Map<string, Promise<ProvisionResult>>();
-
-export async function provision(spec: RepoSpec, recover = false): Promise<ProvisionResult> {
+export function provision(
+  spec: RepoSpec,
+  recover = false,
+  onProgress?: (p: ProvisionProgress) => void,
+): Promise<ProvisionResult> {
   const folder = folderFor(spec);
-  const pending = provisioning.get(folder);
-  if (pending) return pending;
-  const task = provisionOnce(spec, recover);
-  provisioning.set(folder, task);
-  try {
-    return await task;
-  } finally {
-    provisioning.delete(folder);
+  const job = jobs.get(folder);
+  if (job) {
+    if (onProgress && job.last) onProgress(job.last);
+  } else {
+    const j: ProvisionJob = {
+      promise: undefined as unknown as Promise<ProvisionResult>,
+      listeners: new Set(),
+    };
+    // git redraws progress many times a second; forward at most one update
+    // per PROGRESS_THROTTLE_MS (always the latest), but phase changes at once.
+    let pending: ProvisionProgress | undefined;
+    let timer: ReturnType<typeof setTimeout> | null = null;
+    const flush = () => {
+      timer = null;
+      if (!pending) return;
+      j.last = pending;
+      pending = undefined;
+      for (const l of j.listeners) l(j.last);
+    };
+    const emit = (raw: ProvisionProgress) => {
+      const p = { ...raw, text: redact(raw.text).slice(0, 300) };
+      const phaseChanged = (pending ?? j.last)?.phase !== p.phase;
+      pending = p;
+      if (phaseChanged) {
+        if (timer) clearTimeout(timer);
+        flush();
+      } else if (!timer) timer = setTimeout(flush, PROGRESS_THROTTLE_MS);
+    };
+    // Register before starting so no early update is missed.
+    if (onProgress) j.listeners.add(onProgress);
+    j.promise = doProvision(spec, folder, recover, emit).finally(() => {
+      if (timer) clearTimeout(timer);
+      jobs.delete(folder);
+    });
+    jobs.set(folder, j);
+    return j.promise;
   }
+  if (onProgress) {
+    const { listeners } = job;
+    listeners.add(onProgress);
+    void job.promise.finally(() => listeners.delete(onProgress));
+  }
+  return job.promise;
 }
 
-async function provisionOnce(spec: RepoSpec, recover: boolean): Promise<ProvisionResult> {
-  const folder = folderFor(spec);
+async function doProvision(
+  spec: RepoSpec,
+  folder: string,
+  recover: boolean,
+  emit: (p: ProvisionProgress) => void,
+): Promise<ProvisionResult> {
   const base: Omit<ProvisionResult, "action"> & {
     action: ProvisionResult["action"];
   } = {
@@ -417,18 +575,34 @@ async function provisionOnce(spec: RepoSpec, recover: boolean): Promise<Provisio
       // Clone this branch independently into the worktree path.
       await mkdir(path.dirname(folder), { recursive: true });
       const url = `https://github.com/${spec.owner}/${spec.repo}`;
-      await git(WS_ROOT, [
-        "clone",
-        "--branch",
-        spec.branch,
-        "--single-branch",
-        "--recurse-submodules",
-        "--",
-        url,
-        folder,
-      ]);
+      emit({ phase: "clone", text: `git clone ${url}` });
+      await runStreaming(
+        "git",
+        [
+          "clone",
+          "--progress", // stderr isn't a TTY; force the progress lines
+          "--branch",
+          spec.branch,
+          "--single-branch",
+          "--recurse-submodules",
+          "--",
+          url,
+          folder,
+        ],
+        // LC_ALL=C: see git() — classifyError matches English messages.
+        {
+          cwd: WS_ROOT,
+          timeout: GIT_TIMEOUT_MS,
+          env: { ...process.env, LC_ALL: "C", LANG: "C", LANGUAGE: "C" },
+        },
+        (text) => {
+          const m = PROGRESS_RE.exec(text);
+          emit({ phase: "clone", text, percent: m ? Number(m[2]) : undefined });
+        },
+      );
       await seedEnvLocal(spec, folder);
-      await runRepoSetup(folder);
+      emit({ phase: "setup", text: "running setup-repo.sh" });
+      await runRepoSetup(folder, (text) => emit({ phase: "setup", text }));
       const git2 = await readStatus(folder);
       return { ...base, ok: true, action: "cloned", git: git2 };
     }
@@ -444,7 +618,7 @@ async function provisionOnce(spec: RepoSpec, recover: boolean): Promise<Provisio
     return { ...base, ok: true, action: "fetched", git: current };
   } catch (e: unknown) {
     const err = e as { stderr?: string; message?: string };
-    const error = (err.stderr || err.message || String(e)).trim().slice(0, 600);
+    const error = redact((err.stderr || err.message || String(e)).trim()).slice(0, 600);
     return {
       ...base,
       ok: false,
@@ -490,7 +664,7 @@ export async function createBranch(spec: RepoSpec): Promise<ProvisionResult> {
     return { ...base, ok: true, action: "created", git: status };
   } catch (e: unknown) {
     const err = e as { stderr?: string; message?: string };
-    const error = (err.stderr || err.message || String(e)).trim().slice(0, 600);
+    const error = redact((err.stderr || err.message || String(e)).trim()).slice(0, 600);
     return {
       ...base,
       ok: false,

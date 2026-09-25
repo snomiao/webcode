@@ -14,7 +14,7 @@ import "@xterm/xterm/css/xterm.css";
 import { StrictMode } from "react";
 import { createRoot } from "react-dom/client";
 import { WTx } from "./lib/wtx/lib/wtx-react/src";
-import { provisionFromLocation, type Config } from "./provision-client";
+import { progressView, provisionFromLocation, type Config } from "./provision-client";
 
 async function main() {
   const root = createRoot(document.getElementById("root")!);
@@ -35,8 +35,9 @@ async function main() {
   if (!rel) {
     cwd = cfg.wsRoot;
   } else {
-    status.textContent = `Provisioning ${rel}…`;
-    const res = await provisionFromLocation(rel);
+    const view = progressView(status, rel);
+    const res = await provisionFromLocation(rel, false, view.update);
+    view.stop();
     if (!res.ok) {
       status.textContent = `Could not provision ${rel}: ${res.error ?? "error"}`;
       return;

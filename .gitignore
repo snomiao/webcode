@@ -6,3 +6,4 @@ dist/
 .playwright-cli/
 .playwright-cli-multi-tab/
 .debug-shot.png
+.logs
