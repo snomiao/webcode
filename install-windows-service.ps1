@@ -1,7 +1,7 @@
 # Install webcode to run at boot as the current user, via a scheduled task
 # (S4U logon: runs whether or not you're logged in, no stored password).
 # Checkouts land in your ~/ws and portless certs / the `code` CLI resolve as
-# usual. Only a UAC prompt is needed — `webcode serve install` elevates for you.
+# usual. Only a UAC prompt is needed — `webcode service install` elevates for you.
 #
 # Unlike a Windows service running as a user, S4U needs no password. Git/gh
 # logins from Windows Credential Manager work in the web terminal while you are
@@ -21,7 +21,7 @@ param(
   [string]$Base = "/webcode",
   # Publish on the tailnet via `tailscale serve` (set to 0 to keep it local).
   [int]$TailscaleServe = 1,
-  # The user the task runs as; `webcode serve install` passes the unelevated caller.
+  # The user the task runs as; `webcode service install` passes the unelevated caller.
   [string]$User = "$env:USERDOMAIN\$env:USERNAME",
   [switch]$Uninstall
 )
@@ -83,7 +83,7 @@ Register-ScheduledTask -TaskName $Name -Description "webcode: browser VS Code / 
   -Action $action -Trigger $trigger -Settings $settings -Principal $taskPrincipal | Out-Null
 
 # Let the user start/stop/query the task without elevation, so
-# `webcode serve start|stop` works from a normal shell.
+# `webcode service start|stop` works from a normal shell.
 $sid = (New-Object Security.Principal.NTAccount($User)).Translate([Security.Principal.SecurityIdentifier]).Value
 $svc = New-Object -ComObject Schedule.Service
 $svc.Connect()
@@ -93,4 +93,4 @@ $task.SetSecurityDescriptor("D:(A;;FA;;;BA)(A;;FA;;;SY)(A;;FA;;;$sid)", 0)
 Start-ScheduledTask -TaskName $Name
 Get-ScheduledTask -TaskName $Name | Select-Object TaskName, State
 Write-Host "Logs: $repo\.logs\webcode.log"
-Write-Host "Control it with: webcode serve status|start|stop"
+Write-Host "Control it with: webcode service status|start|stop"

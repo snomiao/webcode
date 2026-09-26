@@ -1,6 +1,6 @@
 # Launcher for the `webcode` scheduled task (see install-windows-service.ps1).
 # Runs start.ts on a fixed port behind a static portless alias, logging to
-# .logs\webcode.log. `webcode serve stop` ends the task; the job object below
+# .logs\webcode.log. `webcode service stop` ends the task; the job object below
 # then kills the whole process tree.
 #
 # Why not `bun run dev` (portless run)? A portless route carries the owning
@@ -66,12 +66,12 @@ function Log([string]$cmdline) {
 # Deliberately NOT starting the portless proxy here: a proxy running in this
 # task's session can't signal desktop-session apps either, so it would drop
 # their routes (the same EPERM problem in reverse), and inside the job below
-# it would die with every `webcode serve stop`. The static alias works with
+# it would die with every `webcode service stop`. The static alias works with
 # whichever proxy your desktop runs; the Tailscale URL needs no proxy at all.
 
 # Put this launcher in a kill-on-close job object. Every child (bun, vite,
 # code serve-web, wtx, the shells it spawns) joins the job automatically, so
-# when the task is ended (`schtasks /end`, i.e. `webcode serve stop`) and this
+# when the task is ended (`schtasks /end`, i.e. `webcode service stop`) and this
 # process dies, Windows kills the whole tree. Your desktop session can't
 # taskkill them itself: the task runs in a separate logon session.
 Add-Type -TypeDefinition @"

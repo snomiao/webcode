@@ -51,29 +51,43 @@ bun run dev:direct
 
 This exposes the Vite shell at `http://localhost:3001`.
 
-## Run at boot (Windows) and CLI
+## Run at boot and CLI
 
 `bun link` puts a `webcode` command on your PATH:
 
 ```sh
-webcode serve install     # register the boot-time task (one UAC click, no password)
-webcode serve start       # start it; waits until it answers, then prints the URLs
-webcode serve status      # task state + live portless / Tailscale URLs
-webcode serve stop        # stop it, including vite, VS Code and the terminals
-webcode serve uninstall
+webcode service install     # register it to run at boot, start it, print the URLs
+webcode service start       # start it; waits until it answers, then prints the URLs
+webcode service status      # service state + live local / portless / Tailscale URLs
+webcode service stop        # stop it, including vite, VS Code and the terminals
+webcode service uninstall
 ```
 
-webcode runs as a scheduled task at boot, as you (S4U logon, so no stored
-password), via `serve.ps1`: `start.ts` on a fixed port (4390) behind a static
-`portless alias`, with `WEBCODE_BASE_PATH=/webcode` and `TAILSCALE_SERVE=1` (change
-them in `install-windows-service.ps1`). Logs go to `.logs/webcode.log`. The
-launcher sits in a kill-on-close job object, so `stop` ends the whole tree.
+(`webcode serve …` is an alias.) `install` runs `start.ts` on a fixed port
+(4390) with `WEBCODE_BASE_PATH=/webcode` and `TAILSCALE_SERVE=1`; override with
+`--port <n>`, `--terminal-ws-port <n>`, `--base <path>` or `--no-tailscale`.
+Logs go to `.logs/webcode.log`. `status` reads URLs from what's actually
+running, so it also works for a manual `bun run dev`.
 
-The task doesn't start the portless proxy, because a proxy in the task's
-session would drop your desktop apps' routes. `webcode.localhost` works
-whenever your desktop's portless proxy runs; the Tailscale URL needs no proxy.
-`status` reads URLs from what's actually running, so it also works for a
-manual `bun run dev`.
+The service is platform-specific (adapters in `service/`):
+
+- **Linux** (`service/systemd.ts`): a systemd *user* unit,
+  `~/.config/systemd/user/webcode.service`, so it runs as you and start/stop
+  need no sudo. `install` enables lingering so it starts at boot without a
+  login (if that needs root: `sudo loginctl enable-linger $USER`), and
+  captures your current `PATH` so `bun` and the `code` CLI resolve. For the
+  Tailscale route, make yourself operator once:
+  `sudo tailscale set --operator=$USER`. `KillMode=control-group` makes
+  `stop` end the whole tree; `Restart=always` brings it back after a crash.
+- **Windows** (`service/windows.ts`): a scheduled task at boot, as you (S4U
+  logon, so no stored password, one UAC click to install), via `serve.ps1`
+  behind a static `portless alias`. The launcher sits in a kill-on-close job
+  object, so `stop` ends the whole tree. The task doesn't start the portless
+  proxy, because a proxy in the task's session would drop your desktop apps'
+  routes; `webcode.localhost` works whenever your desktop's portless proxy
+  runs, and the Tailscale URL needs no proxy.
+- **macOS**: not yet; a launchd adapter would implement the same
+  `ServiceAdapter` interface (`service/types.ts`).
 
 ## URL and provisioning
 
