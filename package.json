@@ -13,7 +13,7 @@
     "dev:direct": "bun run start.ts --dev",
     "shell": "vite --port 3001 --strictPort",
     "build": "vite build",
-    "typecheck": "tsc --noEmit --moduleResolution bundler --module preserve --target es2022 --jsx react-jsx --skipLibCheck vite-env.d.ts cli.ts start.ts vite.config.ts shell.ts terminal.tsx provision.ts provision-client.ts"
+    "typecheck": "tsc --noEmit --moduleResolution bundler --module preserve --target es2022 --jsx react-jsx --skipLibCheck vite-env.d.ts cli.ts service/index.ts service/types.ts service/util.ts service/windows.ts service/systemd.ts start.ts vite.config.ts shell.ts terminal.tsx provision.ts provision-client.ts"
   },
   "devDependencies": {
     "@types/react": "^18",

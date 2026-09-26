@@ -2,74 +2,40 @@
 /**
  * webcode CLI.
  *
- *   webcode serve [status]   service state + live portless / Tailscale URLs
- *   webcode serve start      start the `webcode` scheduled task
- *   webcode serve stop       stop it (kills the whole process tree)
- *   webcode serve install    register the boot-time task (UAC; see install-windows-service.ps1)
- *   webcode serve uninstall  remove it (UAC)
+ *   webcode service [status]   service state + live portless / Tailscale URLs
+ *   webcode service start      start the background service
+ *   webcode service stop       stop it (kills the whole process tree)
+ *   webcode service install    register it to run at boot, then start it
+ *   webcode service uninstall  remove it
+ *
+ * `serve` is an alias for `service`. The service itself is platform-specific
+ * (see service/): a scheduled task on Windows, a systemd user unit on Linux.
  *
  * URLs are discovered from what's actually running: portless's routes.json
- * gives the vite port for webcode.localhost, and `tailscale serve status`
- * is matched against that port, so both reflect the live instance whether it
- * runs as the service or via `bun run dev`.
+ * (or the service's fixed port) gives the vite port, and `tailscale serve
+ * status` is matched against that port, so both reflect the live instance
+ * whether it runs as the service or via `bun run dev`.
  */
 
-import { execFile, spawnSync } from "node:child_process";
 import { existsSync, readFileSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { fileURLToPath } from "node:url";
+import { serviceAdapter, type InstallOptions, type ServiceAdapter } from "./service";
+import { run, sleep } from "./service/util";
 
-const HERE = path.dirname(fileURLToPath(import.meta.url));
-const SERVICE = process.env.WEBCODE_SERVICE || "webcode";
 const HOSTNAME = "webcode.localhost";
 const PORTLESS_DIR = path.join(os.homedir(), ".portless");
-const LOG = path.join(HERE, ".logs", "webcode.log");
 const IS_WIN = process.platform === "win32";
 
-function run(cmd: string, args: string[]): Promise<{ code: number; out: string }> {
-  return new Promise((resolve) => {
-    execFile(cmd, args, { timeout: 30_000, windowsHide: true }, (err, stdout, stderr) => {
-      const code = err ? (typeof err.code === "number" ? err.code : 1) : 0;
-      resolve({ code, out: `${stdout}${stderr}`.trim() });
-    });
-  });
-}
-
-// --- Windows scheduled task ---------------------------------------------
-// webcode runs as a boot-time scheduled task (S4U: as you, no stored
-// password) rather than a service, which would need your password.
-
-type TaskState = "Running" | "Ready" | "Disabled" | "Queued" | "NotInstalled" | string;
-
-async function taskState(): Promise<TaskState> {
-  if (!IS_WIN) return "NotInstalled";
-  const { code, out } = await run("schtasks.exe", ["/query", "/tn", SERVICE, "/fo", "csv", "/nh"]);
-  if (code !== 0) return "NotInstalled";
-  // e.g. "\webcode","N/A","Running"
-  const first = out.split(/\r?\n/)[0] ?? "";
-  return /"([^"]*)"\s*$/.exec(first)?.[1] ?? "Unknown";
-}
-
-/** Settings the task was installed with (launcher args in the task XML). */
-async function taskEnv(): Promise<Record<string, string>> {
-  if (!IS_WIN) return {};
-  const { code, out } = await run("schtasks.exe", ["/query", "/tn", SERVICE, "/xml"]);
-  if (code !== 0) return {};
-  const args = /<Arguments>([^<]*)<\/Arguments>/.exec(out)?.[1]?.replace(/&quot;/g, '"') ?? "";
-  const base = /-Base\s+"?([^"\s]+)"?/.exec(args)?.[1];
-  return base ? { WEBCODE_BASE_PATH: base } : {};
-}
-
-async function waitForState(want: TaskState, timeoutMs = 30_000): Promise<TaskState> {
-  const until = Date.now() + timeoutMs;
-  let state = await taskState();
-  while (state !== want && Date.now() < until) {
-    await new Promise((r) => setTimeout(r, 500));
-    state = await taskState();
-  }
-  return state;
-}
+const DEFAULTS: InstallOptions = {
+  // Fixed vite port (behind a static `portless alias webcode <port>`).
+  port: 4390,
+  // wtx's default (3004) is often taken by other local tools.
+  terminalWsPort: 3014,
+  // URL prefix; also the Tailscale Serve mount (https://<host>.ts.net/webcode/).
+  base: "/webcode",
+  tailscaleServe: true,
+};
 
 // --- URL discovery ---------------------------------------------------------
 
@@ -165,131 +131,136 @@ async function probe(url: string): Promise<string> {
   }
 }
 
+/** Where the live instance listens: portless's route, else the service's fixed port. */
+async function liveShell(svc: ServiceAdapter | null) {
+  const cfg = (await svc?.config()) ?? {};
+  const route = portlessRoute();
+  const port = route?.port ?? cfg.port;
+  return { route, port, base: cfg.base };
+}
+
 // --- commands --------------------------------------------------------------
 
-async function status(): Promise<number> {
-  const state = await taskState();
-  const env = await taskEnv();
-  console.log(`task     : ${SERVICE} — ${state === "NotInstalled" ? "not installed (webcode serve install)" : state.toLowerCase()}`);
-
-  const route = portlessRoute();
-  if (!route) {
-    console.log("urls     : none (webcode is not registered with portless — not running?)");
-    return state === "Running" ? 1 : 0;
+async function status(svc: ServiceAdapter | null): Promise<number> {
+  if (svc) {
+    const s = await svc.status();
+    const hint = s.state === "not-installed" ? " (webcode service install)" : "";
+    console.log(`service  : ${svc.name} [${svc.kind}] — ${s.detail}${hint}`);
+  } else {
+    console.log(`service  : not supported on ${process.platform} yet (run \`bun run dev\`)`);
   }
 
-  const ts = await tailscaleUrls(route.port);
-  // Base path: the Tailscale mount is authoritative for the live instance;
-  // fall back to the task's configured base.
-  const base = ts[0] ? new URL(ts[0]).pathname : normBase(env.WEBCODE_BASE_PATH ?? process.env.WEBCODE_BASE_PATH);
-  const local = `${route.url}${base}`;
+  const { route, port, base: cfgBase } = await liveShell(svc);
+  if (!port) {
+    console.log("urls     : none (not registered with portless and no service installed — not running?)");
+    return 0;
+  }
 
-  console.log(`portless : ${local}  [${await probe(`${local}__config`)}]`);
+  const ts = await tailscaleUrls(port);
+  // Base path: the Tailscale mount is authoritative for the live instance;
+  // fall back to the service's configured base.
+  const base = ts[0] ? new URL(ts[0]).pathname : normBase(cfgBase ?? process.env.WEBCODE_BASE_PATH);
+  const local = `http://localhost:${port}${base}`;
+
+  console.log(`local    : ${local}  [${await probe(`${local}__config`)}]`);
+  if (route) console.log(`portless : ${route.url}${base}  [${await probe(`${route.url}${base}__config`)}]`);
   if (ts.length) {
     for (const u of ts) console.log(`tailscale: ${u}  [${await probe(`${u}__config`)}]`);
   } else {
-    console.log("tailscale: not served (set TAILSCALE_SERVE=1)");
+    console.log("tailscale: not served (install with Tailscale enabled, or set TAILSCALE_SERVE=1)");
   }
-  console.log(`vite     : http://localhost:${route.port}${base}`);
   console.log(`open     : <url>github.com/<owner>/<repo>/tree/<branch>  (?ui=vscode | ?ui=wtx)`);
-  if (state !== "NotInstalled") console.log(`logs     : ${LOG}`);
+  if (svc) console.log(`logs     : ${svc.logFile}`);
   return 0;
 }
 
-async function control(action: "start" | "stop"): Promise<number> {
-  if (!IS_WIN) {
-    console.error("webcode serve start/stop controls the Windows scheduled task; on this OS run `bun run dev`.");
-    return 1;
-  }
-  const state = await taskState();
-  if (state === "NotInstalled") {
-    console.error(`Task '${SERVICE}' is not installed. Run: webcode serve install`);
-    return 1;
-  }
-  if (action === "stop") {
-    // Ending the task kills the launcher; its kill-on-close job object (see
-    // serve.ps1) takes down vite, code serve-web, wtx and their shells with it.
-    if (state === "Running") await run("schtasks.exe", ["/end", "/tn", SERVICE]);
-    const final = await waitForState("Ready");
-    console.log(`task     : ${SERVICE} — ${final.toLowerCase()}`);
-    return final === "Ready" ? 0 : 1;
-  }
-  // Retry: right after a stop, Task Scheduler can still be tearing down the
-  // previous instance and silently ignore the run (MultipleInstances=IgnoreNew).
-  for (let attempt = 0; (await taskState()) !== "Running"; attempt++) {
-    if (attempt === 3) {
-      console.error(`Task did not start. Logs: ${LOG}`);
-      return 1;
-    }
-    const { code, out } = await run("schtasks.exe", ["/run", "/tn", SERVICE]);
-    if (code !== 0) {
-      console.error(out);
-      return 1;
-    }
-    await waitForState("Running", 5_000);
-  }
-  // The portless alias is static, so wait for vite itself to answer (and the
-  // tailscale mount, registered right after) before reporting.
-  const until = Date.now() + 60_000;
+/** Wait for the shell (and the Tailscale mount, registered right after) to answer. */
+async function waitUntilUp(svc: ServiceAdapter): Promise<void> {
+  const until = Date.now() + 90_000;
   for (;;) {
-    const route = portlessRoute();
-    const up = route && (await probe(`${route.url}${normBase((await taskEnv()).WEBCODE_BASE_PATH)}__config`)) === "ok";
-    if (up || Date.now() > until) break;
-    await new Promise((r) => setTimeout(r, 1000));
+    const { port, base } = await liveShell(svc);
+    if (port && (await probe(`http://localhost:${port}${normBase(base)}__config`)) === "ok") break;
+    if (Date.now() > until) {
+      console.error(`Service didn't answer within 90s. Logs: ${svc.logFile}`);
+      return;
+    }
+    await sleep(1000);
   }
-  await new Promise((r) => setTimeout(r, 1500));
-  return status();
+  await sleep(1500);
 }
 
-function installer(uninstall: boolean): number {
-  if (!IS_WIN) {
-    console.error("The installer is Windows-only.");
-    return 1;
+function parseInstallOptions(args: string[]): InstallOptions {
+  const o = { ...DEFAULTS };
+  for (let i = 0; i < args.length; i++) {
+    const a = args[i];
+    const value = () => {
+      const v = args[++i];
+      if (v === undefined) throw new Error(`${a} needs a value`);
+      return v;
+    };
+    if (a === "--port") o.port = Number(value());
+    else if (a === "--terminal-ws-port") o.terminalWsPort = Number(value());
+    else if (a === "--base") o.base = value();
+    else if (a === "--no-tailscale") o.tailscaleServe = false;
+    else throw new Error(`unknown option: ${a}`);
   }
-  const script = path.join(HERE, "install-windows-service.ps1");
-  // Pass the unelevated caller so the task runs as them even if UAC elevates
-  // into a different admin account. On failure, keep the window open.
-  const user = `${process.env.USERDOMAIN}\\${process.env.USERNAME}`;
-  const inner =
-    `try { & '${script}' -User '${user}'${uninstall ? " -Uninstall" : ""}; Start-Sleep 3; exit 0 } ` +
-    `catch { Write-Host $_ -ForegroundColor Red; Read-Host 'Failed - press Enter to close'; exit 1 }`;
-  // -EncodedCommand (UTF-16LE base64) sidesteps nested quoting through Start-Process.
-  const encoded = Buffer.from(inner, "utf16le").toString("base64");
-  const r = spawnSync(
-    "powershell.exe",
-    [
-      "-NoProfile",
-      "-Command",
-      `$p = Start-Process powershell.exe -Verb RunAs -Wait -PassThru ` +
-        `-ArgumentList '-NoProfile','-ExecutionPolicy','Bypass','-EncodedCommand','${encoded}'; exit $p.ExitCode`,
-    ],
-    { stdio: "inherit" },
-  );
-  if (r.status !== 0) return r.status ?? 1;
-  return uninstall ? 0 : Number(spawnSync(process.execPath, [fileURLToPath(import.meta.url), "serve", "start"], { stdio: "inherit" }).status ?? 1);
+  if (!Number.isInteger(o.port) || !Number.isInteger(o.terminalWsPort)) throw new Error("ports must be integers");
+  return o;
 }
 
 function usage(): number {
-  console.log(`Usage: webcode serve [status|start|stop|install|uninstall]`);
+  console.log(
+    [
+      "Usage: webcode service [status|start|stop|install|uninstall]",
+      "",
+      "install options:",
+      `  --port <n>              vite shell port (default ${DEFAULTS.port})`,
+      `  --terminal-ws-port <n>  wtx terminal port (default ${DEFAULTS.terminalWsPort})`,
+      `  --base <path>           URL prefix / Tailscale mount (default ${DEFAULTS.base})`,
+      "  --no-tailscale          don't publish on the tailnet via `tailscale serve`",
+    ].join("\n"),
+  );
   return 1;
 }
 
 async function main(argv: string[]): Promise<number> {
-  const [cmd, sub = "status"] = argv;
-  if (cmd !== "serve") return usage();
-  switch (sub) {
-    case "status":
-      return status();
-    case "start":
-    case "stop":
-      return control(sub);
-    case "install":
-      return installer(false);
-    case "uninstall":
-      return installer(true);
-    default:
-      return usage();
+  const [cmd, sub = "status", ...rest] = argv;
+  if (cmd !== "service" && cmd !== "serve") return usage();
+  const svc = serviceAdapter();
+  if (sub === "status") return status(svc);
+  if (!["start", "stop", "install", "uninstall"].includes(sub)) return usage();
+  if (!svc) {
+    console.error(`webcode service ${sub}: no service adapter for ${process.platform} yet; run \`bun run dev\`.`);
+    return 1;
   }
+
+  if (sub === "install") {
+    let opts: InstallOptions;
+    try {
+      opts = parseInstallOptions(rest);
+    } catch (e) {
+      console.error((e as Error).message);
+      return usage();
+    }
+    const code = await svc.install(opts);
+    if (code !== 0) return code;
+  } else if (sub === "uninstall") {
+    return svc.uninstall();
+  } else {
+    const installed = (await svc.status()).state !== "not-installed";
+    if (!installed) {
+      console.error(`${svc.name} is not installed. Run: webcode service install`);
+      return 1;
+    }
+    const code = await svc[sub as "start" | "stop"]();
+    if (code !== 0 || sub === "stop") {
+      console.log(`service  : ${svc.name} — ${(await svc.status()).detail}`);
+      return code;
+    }
+  }
+  // install / start: report once it actually answers.
+  await waitUntilUp(svc);
+  return status(svc);
 }
 
 process.exit(await main(process.argv.slice(2)));
