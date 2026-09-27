@@ -133,6 +133,19 @@ function installGateway(
     ws.on("error", cleanup);
   }
 
+  // The base path exists for the Tailscale mount (https://<host>.ts.net/webcode/).
+  // Locally (webcode.localhost, localhost:<port>) serve the same app at the
+  // root too: map unprefixed requests onto the base. The client parses
+  // either form (app-base.ts) and always requests prefixed URLs itself.
+  if (appBase !== "/") {
+    const bare = appBase.slice(0, -1);
+    server.middlewares.use((req, _res, next) => {
+      const url = req.url ?? "/";
+      if (url !== bare && !url.startsWith(appBase) && !url.startsWith(`${bare}?`)) req.url = bare + url;
+      next();
+    });
+  }
+
   server.middlewares.use(`${appBase}__config`, (_req, res) => {
     res.setHeader("Content-Type", "application/json");
     // `wsRoot` is the absolute path to the workspace root, joined

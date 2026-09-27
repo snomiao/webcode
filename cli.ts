@@ -148,10 +148,12 @@ async function status(svc: ServiceAdapter | null): Promise<number> {
   // Base path: the Tailscale mount is authoritative for the live instance;
   // fall back to the service's configured base.
   const base = ts[0] ? new URL(ts[0]).pathname : normBase(cfgBase ?? process.env.WEBCODE_BASE_PATH);
-  const local = `http://localhost:${port}${base}`;
+  // The base path is for the Tailscale mount; locally the shell also answers
+  // at the root (probed at `${base}__config`, which the app always requests).
+  const local = `http://localhost:${port}/`;
 
-  console.log(`local    : ${local}  [${await probe(`${local}__config`)}]`);
-  if (route) console.log(`portless : ${route.url}${base}  [${await probe(`${route.url}${base}__config`)}]`);
+  console.log(`local    : ${local}  [${await probe(`http://localhost:${port}${base}__config`)}]`);
+  if (route) console.log(`portless : ${route.url}/  [${await probe(`${route.url}${base}__config`)}]`);
   if (ts.length) {
     for (const u of ts) console.log(`tailscale: ${u}  [${await probe(`${u}__config`)}]`);
   } else {

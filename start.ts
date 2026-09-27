@@ -234,7 +234,9 @@ async function main() {
   await new Promise((r) => setTimeout(r, 1500));
 
   const origin = process.env.PORTLESS_URL || `http://localhost:${SHELL_PORT}`;
-  const base = `${origin}${appBase}`;
+  // The base path is only needed on the Tailscale mount; locally the shell
+  // also answers at the root (see installGateway in vite.config.ts).
+  const base = `${origin}/`;
   console.log(
     "[webcode] ready.\n" +
       `  VS Code : ${base}github.com/<owner>/<repo>/tree/<branch>\n` +
