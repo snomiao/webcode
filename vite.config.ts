@@ -7,6 +7,7 @@ import react from "@vitejs/plugin-react";
 import { WebSocketServer, type WebSocket } from "ws";
 import {
   createBranch,
+  createRepo,
   folderFor,
   parseSpec,
   provision,
@@ -165,6 +166,9 @@ function installGateway(
   // POST /api/repo/<owner>/<repo>/tree/<branch>?create=1 -> create the
   //   branch locally off the repo's default branch (no push), for when
   //   provision returned reason:"branch-not-found".
+  // POST /api/repo/<owner>/<repo>/tree/<branch>?createRepo=1 -> `gh repo
+  //   create --private` + a fresh local repo on <branch>, for when provision
+  //   returned reason:"repo-not-found".
   // POST /api/repo/<owner>/<repo>/tree/<branch>?recover=1 -> back up a
   //   populated folder with no .git, then provision (reason:"missing-git").
   server.middlewares.use(`${appBase}api/repo/`, async (req, res) => {
@@ -187,8 +191,9 @@ function installGateway(
       }
       const isPost = req.method === "POST";
       const isCreate = isPost && url.searchParams.get("create") === "1";
+      const isCreateRepo = isPost && url.searchParams.get("createRepo") === "1";
       const recover = isPost && url.searchParams.get("recover") === "1";
-      if (!isCreate && url.searchParams.get("stream") === "1") {
+      if (!isCreate && !isCreateRepo && url.searchParams.get("stream") === "1") {
         // NDJSON: {type:"progress",…} lines while a clone/setup runs,
         // then one {type:"result",result}. Pings keep proxies from
         // dropping the connection during a quiet install step.
@@ -210,9 +215,11 @@ function installGateway(
         }
         return;
       }
-      const result = isCreate
-        ? await createBranch(spec)
-        : await provision(spec, recover);
+      const result = isCreateRepo
+        ? await createRepo(spec)
+        : isCreate
+          ? await createBranch(spec)
+          : await provision(spec, recover);
       return json(result.ok ? 200 : 502, result);
     } catch (e) {
       return json(500, { ok: false, error: String(e) });

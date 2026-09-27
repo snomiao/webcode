@@ -139,6 +139,27 @@ export async function createBranchFromLocation(
   }
 }
 
+/**
+ * Create the GitHub repo (private, via `gh` on the webcode host) plus a fresh
+ * local repo on the branch, for a path whose remote repo doesn't exist.
+ */
+export async function createRepoFromLocation(
+  rel: string,
+): Promise<ProvisionResult> {
+  try {
+    const res = await fetch(appPath(`api/repo/${rel}?createRepo=1`), { method: "POST" });
+    return await parseResult(res);
+  } catch (e) {
+    return {
+      ok: false,
+      folder: "",
+      existed: false,
+      action: "error",
+      error: String(e),
+    };
+  }
+}
+
 const PHASE_LABEL: Record<ProvisionProgress["phase"], string> = {
   clone: "Cloning",
   setup: "Installing dependencies",

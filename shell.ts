@@ -16,6 +16,7 @@ import { appPath, appRelativePath } from "./app-base";
 
 import {
   createBranchFromLocation,
+  createRepoFromLocation,
   progressView,
   provisionFromLocation,
   statusNote,
@@ -115,6 +116,12 @@ async function main() {
     if (result.reason === "branch-not-found") {
       const branch = rel.split("/tree/")[1] ?? rel;
       offerCreateBranch(msg, frame, rel, branch);
+      return;
+    }
+    // The remote repo is missing (or not visible to this host's git
+    // credentials) → show the error plus a "Create private repo" action.
+    if (result.reason === "repo-not-found") {
+      offerCreateRepo(msg, frame, rel, result.folder || `${cfg.wsRoot}/${rel}`, result.error);
       return;
     }
     // Any other failure (backend down, bad/non-JSON response, network): show
@@ -350,6 +357,46 @@ function offerCreateBranch(
       setStatus(
         msg,
         `<strong>Could not create <code>${b}</code></strong><br><pre>${esc(r.error || "unknown error")}</pre>`,
+      );
+      return;
+    }
+    setTitle(rel, r.git);
+    liveTitle(rel);
+    setStatus(msg, `${esc(statusNote(r, rel))}. Opening…`);
+    openVscode(frame, msg, r.folder);
+  });
+}
+
+/**
+ * Troubleshooting for reason "repo-not-found": show the clone error and offer
+ * `gh repo create --private` (run on the webcode host), keeping "Open VS
+ * Code anyway" as a fallback.
+ */
+function offerCreateRepo(
+  msg: HTMLElement,
+  frame: HTMLIFrameElement,
+  rel: string,
+  folder: string,
+  error?: string,
+) {
+  offerOpenAnyway(msg, frame, rel, folder, error);
+  const [owner, repo] = rel.split("/tree/")[0].split("/");
+  const name = esc(`${owner}/${repo}`);
+  const box = document.createElement("div");
+  box.innerHTML =
+    `<p>The repo <code>${name}</code> wasn't found on GitHub. If it doesn't exist yet, create it:</p>` +
+    `<button id="create-repo">Create private repo <code>${name}</code></button>` +
+    `<p style="opacity:.6;font-size:.9em">Runs <code>gh repo create ${name} --private</code> on the webcode host, then starts an empty local repo on this branch. Nothing is pushed yet. If the repo already exists but is private, check the host's <code>gh auth status</code> instead.</p>`;
+  msg.prepend(box);
+  const btn = box.querySelector<HTMLButtonElement>("#create-repo");
+  btn?.addEventListener("click", async () => {
+    btn.disabled = true;
+    setStatus(msg, `Creating <code>${name}</code>…`);
+    const r = await createRepoFromLocation(rel);
+    if (!r.ok) {
+      setStatus(
+        msg,
+        `<strong>Could not create <code>${name}</code></strong><br><pre>${esc(r.error || "unknown error")}</pre>`,
       );
       return;
     }

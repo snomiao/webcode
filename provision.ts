@@ -674,3 +674,54 @@ export async function createBranch(spec: RepoSpec): Promise<ProvisionResult> {
     };
   }
 }
+
+/**
+ * Create `owner/repo` on GitHub as a private repo (`gh repo create
+ * --private`) for a provision that failed with reason "repo-not-found", then
+ * set up the worktree as a fresh local repo on `spec.branch` with `origin`
+ * pointing at it. A clone wouldn't work: the new repo is empty, so
+ * `clone --branch` has nothing to check out. The first push publishes the
+ * branch (and makes it the default). Never throws.
+ */
+export async function createRepo(spec: RepoSpec): Promise<ProvisionResult> {
+  const folder = folderFor(spec);
+  const base = {
+    ok: false as boolean,
+    spec,
+    folder,
+    existed: existsSync(path.join(folder, ".git")),
+    action: "none" as ProvisionResult["action"],
+  };
+  if (base.existed) {
+    return { ...base, action: "error", error: "worktree already exists" };
+  }
+  try {
+    const entries = await readdir(folder).catch(() => []);
+    if (entries.length > 0) {
+      return {
+        ...base, action: "error", reason: "missing-git",
+        error: "This folder contains files but has no .git metadata; not creating a repo over it.",
+      };
+    }
+    await execFileP(
+      "gh",
+      ["repo", "create", `${spec.owner}/${spec.repo}`, "--private"],
+      { cwd: WS_ROOT, timeout: GIT_TIMEOUT_MS },
+    );
+    await mkdir(folder, { recursive: true });
+    await git(folder, ["init", "-b", spec.branch]);
+    await git(folder, [
+      "remote", "add", "origin",
+      `https://github.com/${spec.owner}/${spec.repo}`,
+    ]);
+    await seedEnvLocal(spec, folder);
+    const status = await readStatus(folder);
+    return { ...base, ok: true, action: "created", git: status };
+  } catch (e: unknown) {
+    const err = e as { stderr?: string; message?: string; code?: string };
+    const error = err.code === "ENOENT"
+      ? "GitHub CLI (gh) not found on the webcode host. Install it and run `gh auth login`."
+      : redact((err.stderr || err.message || String(e)).trim()).slice(0, 600);
+    return { ...base, action: "error", error };
+  }
+}
