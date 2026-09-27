@@ -7,3 +7,6 @@ dist/
 .playwright-cli-multi-tab/
 .debug-shot.png
 .logs
+
+# Claude Code per-user settings
+.claude/settings.local.json
