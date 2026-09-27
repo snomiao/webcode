@@ -17,6 +17,7 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 
 import { appBase } from "./server-base";
+import { findTailscale } from "./find-tailscale";
 
 const HERE = path.dirname(fileURLToPath(import.meta.url));
 const VSCODE_PORT = 9999;
@@ -150,25 +151,6 @@ function supervise(cmd: string, args: string[], label: string): void {
   start();
 }
 
-/** Locate the `tailscale` CLI: PATH first, then the stock install locations. */
-function findTailscale(): string | null {
-  const exts = process.platform === "win32" ? [".exe", ".cmd", ""] : [""];
-  for (const dir of (process.env.PATH || "").split(path.delimiter)) {
-    if (!dir) continue;
-    for (const ext of exts) {
-      const p = path.join(dir, "tailscale" + ext);
-      if (existsSync(p)) return p;
-    }
-  }
-  for (const p of [
-    "C:\\Program Files\\Tailscale\\tailscale.exe",
-    "/Applications/Tailscale.app/Contents/MacOS/Tailscale",
-    "/usr/bin/tailscale",
-  ]) {
-    if (existsSync(p)) return p;
-  }
-  return null;
-}
 
 function tailscale(bin: string, args: string[]): Promise<string> {
   return new Promise((resolve, reject) => {

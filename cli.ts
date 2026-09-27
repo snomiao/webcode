@@ -22,6 +22,7 @@ import os from "node:os";
 import path from "node:path";
 import { serviceAdapter, type InstallOptions, type ServiceAdapter } from "./service";
 import { run, sleep } from "./service/util";
+import { findTailscale } from "./find-tailscale";
 
 const HOSTNAME = "webcode.localhost";
 const PORTLESS_DIR = path.join(os.homedir(), ".portless");
@@ -90,19 +91,6 @@ async function tailscaleUrls(port: number): Promise<string[]> {
   return urls;
 }
 
-function findTailscale(): string | null {
-  const exts = IS_WIN ? [".exe", ""] : [""];
-  for (const dir of (process.env.PATH || "").split(path.delimiter)) {
-    for (const ext of exts) {
-      const p = dir && path.join(dir, `tailscale${ext}`);
-      if (p && existsSync(p)) return p;
-    }
-  }
-  for (const p of ["C:\\Program Files\\Tailscale\\tailscale.exe", "/usr/bin/tailscale"]) {
-    if (existsSync(p)) return p;
-  }
-  return null;
-}
 
 function normBase(raw: string | undefined): string {
   const t = (raw || "/").trim().replace(/^\/+|\/+$/g, "");
