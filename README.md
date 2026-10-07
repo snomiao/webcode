@@ -60,10 +60,17 @@ webcode service install     # register it to run at boot, start it, print the UR
 webcode service start       # start it; waits until it answers, then prints the URLs
 webcode service status      # service state + live local / portless / Tailscale URLs
 webcode service stop        # stop it, including vite, VS Code and the terminals
+webcode service restart
+webcode service logs        # follow the service log
 webcode service uninstall
+webcode share               # publish the running instance on your tailnet, print the link
+webcode share off           # remove that tailnet route
 ```
 
-(`webcode serve …` is an alias.) `install` runs `start.ts` on a fixed port
+(`webcode serve …` is an alias, and the service subcommands also work bare:
+`webcode status`, `webcode start`, ….) `share` mounts the live shell with
+`tailscale serve` at its base path (tailnet-only; it refuses while Funnel is
+on, since the route would then be public). `install` runs `start.ts` on a fixed port
 (4390) with `WEBCODE_BASE_PATH=/webcode` and `TAILSCALE_SERVE=1`; override with
 `--port <n>`, `--terminal-ws-port <n>`, `--base <path>` or `--no-tailscale`.
 Logs go to `.logs/webcode.log`. `status` reads URLs from what's actually
@@ -86,8 +93,11 @@ The service is platform-specific (adapters in `service/`):
   proxy, because a proxy in the task's session would drop your desktop apps'
   routes; `webcode.localhost` works whenever your desktop's portless proxy
   runs, and the Tailscale URL needs no proxy.
-- **macOS**: not yet; a launchd adapter would implement the same
-  `ServiceAdapter` interface (`service/types.ts`).
+- **macOS** (`service/oxmgr.ts`): an [oxmgr](https://github.com/Vladimir-Urik/OxMgr)
+  process named `webcode` (`bun add -g oxmgr`), restarted on exit and on a
+  failing health check. oxmgr's daemon itself comes back at login via its
+  LaunchAgent (`oxmgr service install`; `install` warns if it's missing).
+  Logs are oxmgr's, under `~/Library/Application Support/oxmgr/logs/`.
 
 ## URL and provisioning
 
