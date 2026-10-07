@@ -1,8 +1,8 @@
 /**
  * A platform adapter for running webcode as a boot-time background service.
  * `webcode service …` (cli.ts) is platform-neutral and delegates to one of
- * these: windows.ts (scheduled task), systemd.ts (Linux user unit). A macOS
- * launchd adapter would implement the same interface.
+ * these: windows.ts (scheduled task), systemd.ts (Linux user unit),
+ * oxmgr.ts (macOS, an oxmgr process kept alive by launchd).
  */
 
 export type ServiceState = "running" | "stopped" | "not-installed";

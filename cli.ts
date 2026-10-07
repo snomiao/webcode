@@ -6,10 +6,16 @@
  *   webcode service start      start the background service
  *   webcode service stop       stop it (kills the whole process tree)
  *   webcode service install    register it to run at boot, then start it
+ *   webcode service restart    stop, then start
+ *   webcode service logs       follow the service log
  *   webcode service uninstall  remove it
+ *   webcode share [off]        publish the running instance on your tailnet
+ *                              (tailnet-only `tailscale serve`), print its URL
  *
- * `serve` is an alias for `service`. The service itself is platform-specific
- * (see service/): a scheduled task on Windows, a systemd user unit on Linux.
+ * `serve` is an alias for `service`, and its subcommands also work bare
+ * (`webcode status`, `webcode start`, …). The service itself is
+ * platform-specific (see service/): a scheduled task on Windows, a systemd
+ * user unit on Linux, an oxmgr process on macOS.
  *
  * URLs are discovered from what's actually running: portless's routes.json
  * (or the service's fixed port) gives the vite port, and `tailscale serve
@@ -17,6 +23,7 @@
  * whether it runs as the service or via `bun run dev`.
  */
 
+import { spawnSync } from "node:child_process";
 import { existsSync, readFileSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
@@ -65,10 +72,26 @@ function portlessRoute(): { port: number; url: string } | null {
   return { port: route.port, url: origin };
 }
 
-/** Tailscale Serve mounts that proxy to `port`, as full URLs. */
+/** This machine's current MagicDNS name, or null if unknown. */
+async function tailscaleSelf(bin: string): Promise<string | null> {
+  const { code, out } = await run(bin, ["status", "--json"]);
+  if (code !== 0) return null;
+  try {
+    return String(JSON.parse(out)?.Self?.DNSName || "").replace(/\.$/, "") || null;
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * Tailscale Serve mounts that proxy to `port`, as full URLs. Only this
+ * machine's current name counts: serve config keeps entries for names from
+ * tailnets it has since left, which no longer resolve.
+ */
 async function tailscaleUrls(port: number): Promise<string[]> {
   const bin = findTailscale();
   if (!bin) return [];
+  const self = await tailscaleSelf(bin);
   const { code, out } = await run(bin, ["serve", "status", "--json"]);
   if (code !== 0) return [];
   let status: { Web?: Record<string, { Handlers?: Record<string, { Proxy?: string }> }> };
@@ -80,6 +103,7 @@ async function tailscaleUrls(port: number): Promise<string[]> {
   const urls: string[] = [];
   for (const [hostPort, web] of Object.entries(status.Web ?? {})) {
     const [host, p] = hostPort.split(":");
+    if (self && host !== self) continue;
     for (const [mount, h] of Object.entries(web.Handlers ?? {})) {
       const target = h.Proxy ? new URL(h.Proxy) : null;
       if (target && Number(target.port) === port) {
@@ -164,6 +188,75 @@ async function status(svc: ServiceAdapter | null): Promise<number> {
   return 0;
 }
 
+/**
+ * `webcode share`: mount the live shell on this machine's tailnet origin with
+ * `tailscale serve` (tailnet-only; refused while Funnel would make it public)
+ * and print the link. `webcode share off` removes the mount.
+ */
+async function share(svc: ServiceAdapter | null, args: string[]): Promise<number> {
+  const bin = findTailscale();
+  if (!bin) {
+    console.error("share: the tailscale CLI was not found. Install Tailscale and log in first.");
+    return 1;
+  }
+  const { port, base: cfgBase } = await liveShell(svc);
+  const live = port ? await tailscaleUrls(port) : [];
+  const base = live[0] ? new URL(live[0]).pathname : normBase(cfgBase ?? process.env.WEBCODE_BASE_PATH);
+  const mount = base === "/" ? "/" : base.slice(0, -1);
+
+  if (args[0] === "off" || args[0] === "stop") {
+    const r = await run(bin, ["serve", "--set-path", mount, "off"]);
+    if (r.code !== 0) {
+      console.error(`tailscale serve --set-path ${mount} off failed:\n${r.out}`);
+      return r.code;
+    }
+    console.log(`Stopped sharing ${mount} on the tailnet.`);
+    return 0;
+  }
+  if (args.length) {
+    console.error("Usage: webcode share [off]");
+    return 1;
+  }
+
+  if (!port || (await probe(`http://localhost:${port}${base}__config`)) !== "ok") {
+    console.error("share: webcode isn't running. Start it first: webcode start");
+    return 1;
+  }
+  if (base === "/") console.warn("warning: base path is \"/\", so this claims the whole tailnet origin (set WEBCODE_BASE_PATH).");
+
+  if (!live.length) {
+    const { out } = await run(bin, ["serve", "status", "--json"]);
+    let funnel = false;
+    try {
+      funnel = Object.values(JSON.parse(out).AllowFunnel ?? {}).some(Boolean);
+    } catch {
+      /* no serve config yet */
+    }
+    if (funnel) {
+      console.error("Tailscale Funnel is on for this machine, so a Serve route here would be public, not tailnet-only. Not sharing.\n  Turn Funnel off (tailscale funnel reset), then webcode share again.");
+      return 1;
+    }
+    const target = `http://127.0.0.1:${port}${base}`;
+    const r = await run(bin, ["serve", "--bg", "--set-path", mount, target]);
+    if (r.code !== 0) {
+      console.error(`tailscale serve failed. Run it yourself, then webcode share again:\n  tailscale serve --bg --set-path ${mount} ${target}\n${r.out}`);
+      return 1;
+    }
+  }
+
+  const urls = live.length ? live : await tailscaleUrls(port);
+  for (const u of urls) {
+    const state = await probe(`${u}__config`);
+    console.log(`shared   : ${u}  [${state}]  (tailnet only)`);
+    // vite rejects Host headers it doesn't know; start.ts allows the tailnet
+    // name only when it registered the route itself (TAILSCALE_SERVE=1).
+    if (state === "HTTP 403") console.warn("warning: the shell rejects the tailnet host name. Reinstall with Tailscale enabled (webcode service install), or set __VITE_ADDITIONAL_SERVER_ALLOWED_HOSTS and restart.");
+  }
+  if (urls[0]) console.log(`open     : ${urls[0]}github.com/<owner>/<repo>/tree/<branch>`);
+  console.log("stop     : webcode share off");
+  return 0;
+}
+
 /** Wait for the shell (and the Tailscale mount, registered right after) to answer. */
 async function waitUntilUp(svc: ServiceAdapter): Promise<void> {
   const until = Date.now() + 90_000;
@@ -177,6 +270,22 @@ async function waitUntilUp(svc: ServiceAdapter): Promise<void> {
     await sleep(1000);
   }
   await sleep(1500);
+}
+
+/** Follow the service log(s) until interrupted. */
+function logs(svc: ServiceAdapter): number {
+  const files = svc.logFile.includes("{out,err}")
+    ? ["out", "err"].map((k) => svc.logFile.replace("{out,err}", k))
+    : [svc.logFile];
+  const existing = files.filter((f) => existsSync(f));
+  if (!existing.length) {
+    console.error(`no log yet: ${svc.logFile}`);
+    return 1;
+  }
+  const [cmd, ...args] = IS_WIN
+    ? ["powershell", "-NoProfile", "-Command", `Get-Content -Wait -Tail 100 '${existing[0]}'`]
+    : ["tail", "-n", "100", "-F", ...existing];
+  return spawnSync(cmd, args, { stdio: "inherit" }).status ?? 0;
 }
 
 function parseInstallOptions(args: string[]): InstallOptions {
@@ -201,7 +310,8 @@ function parseInstallOptions(args: string[]): InstallOptions {
 function usage(): number {
   console.log(
     [
-      "Usage: webcode service [status|start|stop|install|uninstall]",
+      "Usage: webcode [service] [status|start|stop|restart|logs|install|uninstall]",
+      "       webcode share [off]",
       "",
       "install options:",
       `  --port <n>              vite shell port (default ${DEFAULTS.port})`,
@@ -214,11 +324,17 @@ function usage(): number {
 }
 
 async function main(argv: string[]): Promise<number> {
+  // `webcode start` == `webcode service start`, etc.
+  if (argv[0] !== "service" && argv[0] !== "serve" && argv[0] !== "share") argv = ["service", ...argv];
   const [cmd, sub = "status", ...rest] = argv;
-  if (cmd !== "service" && cmd !== "serve") return usage();
   const svc = serviceAdapter();
+  if (cmd === "share") return share(svc, argv.slice(1));
   if (sub === "status") return status(svc);
-  if (!["start", "stop", "install", "uninstall"].includes(sub)) return usage();
+  if (sub === "help" || sub === "--help" || sub === "-h") {
+    usage();
+    return 0;
+  }
+  if (!["start", "stop", "restart", "logs", "install", "uninstall"].includes(sub)) return usage();
   if (!svc) {
     console.error(`webcode service ${sub}: no service adapter for ${process.platform} yet; run \`bun run dev\`.`);
     return 1;
@@ -236,13 +352,19 @@ async function main(argv: string[]): Promise<number> {
     if (code !== 0) return code;
   } else if (sub === "uninstall") {
     return svc.uninstall();
+  } else if (sub === "logs") {
+    return logs(svc);
   } else {
     const installed = (await svc.status()).state !== "not-installed";
     if (!installed) {
       console.error(`${svc.name} is not installed. Run: webcode service install`);
       return 1;
     }
-    const code = await svc[sub as "start" | "stop"]();
+    if (sub === "restart") {
+      const code = await svc.stop();
+      if (code !== 0) return code;
+    }
+    const code = await svc[sub === "restart" ? "start" : (sub as "start" | "stop")]();
     if (code !== 0 || sub === "stop") {
       console.log(`service  : ${svc.name} — ${(await svc.status()).detail}`);
       return code;

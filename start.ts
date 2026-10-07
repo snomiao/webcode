@@ -11,6 +11,7 @@
  */
 
 import { execFile, spawn, spawnSync, type ChildProcess } from "node:child_process";
+import { createHash } from "node:crypto";
 import { existsSync, mkdirSync, readFileSync, readdirSync, writeFileSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
@@ -152,6 +153,41 @@ function supervise(cmd: string, args: string[], label: string): void {
 }
 
 
+// Stamp of the inputs dist/ was last built from. Kept outside dist/ so
+// `vite preview` doesn't serve it.
+const BUILD_STAMP_FILE = path.join(HERE, "node_modules", ".cache", "webcode-build-stamp");
+
+function readText(file: string): string | null {
+  try {
+    return readFileSync(file, "utf8");
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * Hash of everything the shell bundle is built from: the base path, the
+ * top-level sources, html, config and lockfile, and the WTx React component
+ * from the wtx submodule. A cold start rebuilds only when this changes; a
+ * rebuild takes minutes on a busy machine, long enough to trip the service
+ * manager's health check.
+ */
+function buildStamp(): string {
+  const hash = createHash("sha256").update(`base=${appBase}\n`);
+  const files = (dir: string, recurse: boolean): string[] =>
+    readdirSync(path.join(HERE, dir), { withFileTypes: true })
+      .flatMap((e) => {
+        const rel = path.join(dir, e.name);
+        if (e.isDirectory()) return recurse ? files(rel, true) : [];
+        return /\.(tsx?|html|css|json|lock)$/.test(e.name) ? [rel] : [];
+      })
+      .sort();
+  for (const rel of [...files(".", false), ...files(path.join("lib", "wtx", "lib", "wtx-react", "src"), true)]) {
+    hash.update(`${rel}\0`).update(readFileSync(path.join(HERE, rel))).update("\0");
+  }
+  return hash.digest("hex");
+}
+
 function tailscale(bin: string, args: string[]): Promise<string> {
   return new Promise((resolve, reject) => {
     execFile(bin, args, { timeout: 30_000 }, (err, stdout, stderr) => {
@@ -214,15 +250,22 @@ async function main() {
     process.env.WEBCODE_HMR = "1";
     supervise("bunx", ["vite", ...viteArgs], "vite shell (dev)");
   } else {
-    console.log("[web-code] building shell (vite build)…");
-    const built = spawnSync("bunx", ["vite", "build"], {
-      stdio: "inherit",
-      shell: NEEDS_SHELL,
-      cwd: HERE,
-    });
-    if (built.status !== 0) {
-      console.error(`[web-code] vite build failed (${built.status}); exiting`);
-      process.exit(1);
+    const stamp = buildStamp();
+    if (existsSync(path.join(HERE, "dist", "index.html")) && readText(BUILD_STAMP_FILE) === stamp) {
+      console.log("[web-code] shell bundle is up to date; skipping vite build");
+    } else {
+      console.log("[web-code] building shell (vite build)…");
+      const built = spawnSync("bunx", ["vite", "build"], {
+        stdio: "inherit",
+        shell: NEEDS_SHELL,
+        cwd: HERE,
+      });
+      if (built.status !== 0) {
+        console.error(`[web-code] vite build failed (${built.status}); exiting`);
+        process.exit(1);
+      }
+      mkdirSync(path.dirname(BUILD_STAMP_FILE), { recursive: true });
+      writeFileSync(BUILD_STAMP_FILE, stamp);
     }
     supervise("bunx", ["vite", "preview", ...viteArgs], "vite shell");
   }
