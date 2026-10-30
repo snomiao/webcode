@@ -39,6 +39,8 @@ export default defineConfig({
     host: "127.0.0.1",
     port: 3001,
     strictPort: true,
+    // Reached through `tailscale serve` at https://<host>.ts.net/webcode/.
+    allowedHosts: [".ts.net"],
     // Dev mode only (`start.ts --dev`). A checkout of webcode is often edited
     // from inside webcode, and with HMR every save to the shell's sources
     // full-reloads every open tab — tearing down the VS Code and terminal
@@ -55,6 +57,9 @@ export default defineConfig({
         ws: true,
       },
     },
+  },
+  preview: {
+    allowedHosts: [".ts.net"],
   },
   build: {
     rollupOptions: {
