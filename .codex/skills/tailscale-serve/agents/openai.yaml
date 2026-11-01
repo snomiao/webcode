@@ -1,0 +1,4 @@
+interface:
+  display_name: "Tailscale Serve"
+  short_description: "Expose local web apps securely over Tailscale"
+  default_prompt: "Use $tailscale-serve to expose this local web app through Tailscale Serve."
