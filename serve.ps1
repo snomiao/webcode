@@ -1,7 +1,7 @@
 # Launcher for the `webcode` scheduled task (see install-windows-service.ps1).
 # Runs start.ts on a fixed port behind a static portless alias, logging to
-# .logs\webcode.log. `webcode service stop` ends the task; the job object below
-# then kills the whole process tree.
+# .logs\webcode.log, restarting it if it exits. `webcode service stop` ends the
+# task; the job object below then kills the whole process tree.
 #
 # Why not `bun run dev` (portless run)? A portless route carries the owning
 # PID, and the proxy drops routes whose PID it can't signal. The task runs in
@@ -40,9 +40,12 @@ for ($i = 0; $i -lt 60; $i++) {
 }
 
 # Keep one previous log instead of growing forever.
-if ((Test-Path $log) -and (Get-Item $log).Length -gt 10MB) {
-  Move-Item -Force $log "$log.1"
+function Rotate-Log {
+  if ((Test-Path $log) -and (Get-Item $log).Length -gt 10MB) {
+    Move-Item -Force $log "$log.1"
+  }
 }
+Rotate-Log
 Set-Content -Path (Join-Path $logDir "webcode.pid") -Value $PID -Encoding ascii
 
 Set-Location $repo
@@ -97,8 +100,24 @@ public static class WebcodeJob {
 "@
 $inJob = [WebcodeJob]::Enter()
 
-"=== webcode start $(Get-Date -Format o) (pid $PID, port $Port, job $inJob) ===" | Out-File -Append -Encoding ascii $log
-# Route webcode.localhost to our fixed port, then run the app.
+# Route webcode.localhost to our fixed port.
 Log "`"$portless`" alias webcode $Port --force"
-Log "`"$Bun`" start.ts"
-exit $LASTEXITCODE
+
+# Supervise start.ts. It respawns its own children, but if start.ts itself
+# dies (a native crash, OOM kill, ...) nothing else brings it back: the task's
+# RestartCount only covers failures to *launch* the task, not a task action
+# that exits later. So loop here, with a capped backoff that resets once a run
+# has stayed up for a while. `webcode service stop` ends this process, and the
+# job object takes bun down with it, so the loop never outlives a stop.
+$backoff = 5
+while ($true) {
+  Rotate-Log
+  "=== webcode start $(Get-Date -Format o) (pid $PID, port $Port, job $inJob) ===" | Out-File -Append -Encoding ascii $log
+  $started = Get-Date
+  Log "`"$Bun`" start.ts"
+  $code = $LASTEXITCODE
+  if (((Get-Date) - $started).TotalMinutes -ge 5) { $backoff = 5 }
+  "=== webcode exited $(Get-Date -Format o) (code $code); restarting in ${backoff}s ===" | Out-File -Append -Encoding ascii $log
+  Start-Sleep -Seconds $backoff
+  $backoff = [Math]::Min($backoff * 2, 60)
+}
