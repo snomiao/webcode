@@ -13,7 +13,7 @@
     "dev:direct": "bun run start.ts --dev",
     "shell": "vite --port 3001 --strictPort",
     "build": "vite build",
-    "typecheck": "tsc --noEmit --moduleResolution bundler --module preserve --target es2022 --jsx react-jsx --skipLibCheck vite-env.d.ts cli.ts service/index.ts service/types.ts service/util.ts service/windows.ts service/systemd.ts service/oxmgr.ts start.ts vite.config.ts shell.ts terminal.tsx provision.ts provision-client.ts",
+    "typecheck": "tsrs --noEmit --moduleResolution bundler --module preserve --target es2022 --jsx react-jsx --skipLibCheck vite-env.d.ts cli.ts service/index.ts service/types.ts service/util.ts service/windows.ts service/systemd.ts service/oxmgr.ts start.ts vite.config.ts shell.ts terminal.tsx provision.ts provision-client.ts",
     "test:postinstall": "bun test scripts/install-wtx.test.ts"
   },
   "devDependencies": {
@@ -22,7 +22,7 @@
     "@types/ws": "^8.18.1",
     "@vitejs/plugin-react": "^4",
     "portless": "^0.15.4",
-    "typescript": "^5.9.0",
+    "tsrs": "0.25.0-ts7.1.0-beta",
     "vite": "^7.3.1"
   },
   "dependencies": {
