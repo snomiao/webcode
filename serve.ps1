@@ -13,7 +13,8 @@ param(
   [int]$Port = 4390,
   [int]$TerminalWsPort = 3014,
   [string]$Base = "/webcode",
-  [int]$TailscaleServe = 1
+  [int]$TailscaleServe = 1,
+  [switch]$CodexSandboxDesktop
 )
 
 # The task has no console, so record launcher failures somewhere visible.
@@ -27,6 +28,10 @@ $repo = $PSScriptRoot
 $logDir = Join-Path $repo ".logs"
 $log = Join-Path $logDir "webcode.log"
 New-Item -ItemType Directory -Force $logDir | Out-Null
+
+if ($CodexSandboxDesktop) {
+  & (Join-Path $repo 'service\codex-sandbox-desktop.ps1') -BackupDirectory $logDir
+}
 
 # A just-stopped instance can hold the log open for a moment while its job
 # tears down; wait for it rather than failing the start.

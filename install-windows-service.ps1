@@ -23,6 +23,8 @@ param(
   [int]$TailscaleServe = 1,
   # The user the task runs as; `webcode service install` passes the unelevated caller.
   [string]$User = "$env:USERDOMAIN\$env:USERNAME",
+  # Opt in only when using the repaired Codex runner for service sessions.
+  [switch]$CodexSandboxDesktop,
   [switch]$Uninstall
 )
 
@@ -69,6 +71,7 @@ $bun = (Get-Command bun).Source
 $launcher = Join-Path $repo "serve.ps1"
 $argsLine = "-NoProfile -ExecutionPolicy Bypass -WindowStyle Hidden -File `"$launcher`" " +
   "-Bun `"$bun`" -Port $Port -TerminalWsPort $TerminalWsPort -Base `"$Base`" -TailscaleServe $TailscaleServe"
+if ($CodexSandboxDesktop) { $argsLine += " -CodexSandboxDesktop" }
 
 $action = New-ScheduledTaskAction -Execute "powershell.exe" -Argument $argsLine -WorkingDirectory $repo
 $trigger = New-ScheduledTaskTrigger -AtStartup
