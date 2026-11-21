@@ -1,4 +1,5 @@
 import { appBase } from "./server-base";
+import { legacyRepoRedirect } from "./repo-route";
 import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
@@ -85,6 +86,15 @@ export default defineConfig({
 function installGateway(
   server: Pick<ViteDevServer, "middlewares" | "httpServer">,
 ) {
+  server.middlewares.use((req, res, next) => {
+    const redirect = legacyRepoRedirect(req.url ?? "/", appBase);
+    if (redirect && (req.method === "GET" || req.method === "HEAD")) {
+      res.writeHead(308, { Location: redirect });
+      res.end();
+      return;
+    }
+    next();
+  });
   // Multiplexed git-status WebSocket at /api/watch-ws. One socket (held
   // by a client SharedWorker, shared across all tabs) carries many repo
   // subscriptions: {type:'sub'|'unsub', rel}. The server pushes

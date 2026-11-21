@@ -3,8 +3,8 @@
 Open a GitHub repository in local browser VS Code or a web terminal:
 
 ```text
-https://webcode.localhost/github.com/<owner>/<repo>/tree/<branch>
-https://webcode.localhost/github.com/<owner>/<repo>/tree/<branch>?ui=wtx
+https://webcode.localhost/gh/<owner>/<repo>/tree/<branch>
+https://webcode.localhost/gh/<owner>/<repo>/tree/<branch>?ui=wtx
 ```
 
 webcode provisions the matching checkout under
@@ -93,6 +93,8 @@ The service is platform-specific (adapters in `service/`):
   proxy, because a proxy in the task's session would drop your desktop apps'
   routes; `webcode.localhost` works whenever your desktop's portless proxy
   runs, and the Tailscale URL needs no proxy.
+  For Codex's Session 0 sandbox startup issue, see the opt-in
+  [service desktop repair](docs/windows-codex-sandbox.md).
 - **macOS** (`service/oxmgr.ts`): an [oxmgr](https://github.com/Vladimir-Urik/OxMgr)
   process named `webcode` (`bun add -g oxmgr`), restarted on exit and on a
   failing health check. oxmgr's daemon itself comes back at login via its
@@ -104,11 +106,14 @@ The service is platform-specific (adapters in `service/`):
 The canonical path is:
 
 ```text
-/github.com/<owner>/<repo>/tree/<branch>
+/gh/<owner>/<repo>/tree/<branch>
 ```
 
-For compatibility, `/<owner>/<repo>/tree/<branch>` is also accepted. Branch
-names may contain slashes.
+Old `/github.com/...` and `/webcode/github.com/...` links redirect to `/gh/...`,
+preserving the branch and query parameters. The legacy
+`/<owner>/<repo>/tree/<branch>` shape also redirects, including beneath `/webcode`.
+Branch names may contain
+slashes. The configured base remains the internal asset/API mount.
 
 The provisioning API is:
 
@@ -140,14 +145,15 @@ In another terminal, add the private route without replacing other apps:
 
 ```sh
 tailscale serve --bg --https=443 --set-path=/webcode http://127.0.0.1:3001/webcode
+tailscale serve --bg --https=443 --set-path=/gh http://127.0.0.1:3001/webcode/gh
 ```
 
-Open `https://<machine>.<tailnet>.ts.net/webcode/`, optionally followed by
-`github.com/<owner>/<repo>/tree/<branch>` or `?ui=wtx`.
-The proxy target includes `/webcode` to restore the prefix stripped by Serve.
+Open `https://<machine>.<tailnet>.ts.net/gh/<owner>/<repo>/tree/<branch>`,
+optionally followed by `?ui=wtx`. Keep the `/webcode` mount for assets, APIs,
+and existing links. Each proxy target restores the prefix stripped by Serve.
 `WEBCODE_BASE_PATH` defaults to `/` for local use. The Serve route persists;
 keep the Webcode process running separately.
 
 Alternatively, set `TAILSCALE_SERVE=1`: `start.ts` then allows the machine's
-tailnet hostname, registers the same route itself on every launch, and removes
-it on shutdown.
+tailnet hostname, registers both routes on every launch, and removes them on
+shutdown. Existing installations can add the short alias with `webcode share`.

@@ -7,7 +7,7 @@
  *     run with `--dev`
  *
  * Run with `portless webcode bun start.ts` for
- * https://webcode.localhost/github.com/<owner>/<repo>/tree/<branch>.
+ * https://webcode.localhost/gh/<owner>/<repo>/tree/<branch>.
  */
 
 import { execFile, spawn, spawnSync, type ChildProcess } from "node:child_process";
@@ -18,6 +18,7 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 
 import { appBase } from "./server-base";
+import { serveMounts } from "./repo-route";
 import { findTailscale } from "./find-tailscale";
 
 const HERE = path.dirname(fileURLToPath(import.meta.url));
@@ -203,8 +204,9 @@ function tailscale(bin: string, args: string[]): Promise<string> {
  * static `tailscale serve` entry would go stale.
  */
 async function tailscaleServeUp(bin: string): Promise<void> {
-  const target = `http://127.0.0.1:${SHELL_PORT}${appBase}`;
-  await tailscale(bin, ["serve", "--bg", "--set-path", TAILSCALE_MOUNT, target]);
+  for (const { mount, target } of serveMounts(appBase, SHELL_PORT)) {
+    await tailscale(bin, ["serve", "--bg", "--set-path", mount, target]);
+  }
 }
 
 /** This machine's MagicDNS name (`<machine>.<tailnet>.ts.net`), or null. */
@@ -218,7 +220,9 @@ async function tailscaleHost(bin: string): Promise<string | null> {
 }
 
 async function tailscaleServeDown(bin: string): Promise<void> {
-  await tailscale(bin, ["serve", "--set-path", TAILSCALE_MOUNT, "off"]).catch(() => {});
+  for (const { mount } of serveMounts(appBase, SHELL_PORT)) {
+    await tailscale(bin, ["serve", "--set-path", mount, "off"]).catch(() => {});
+  }
 }
 
 async function main() {
@@ -282,8 +286,8 @@ async function main() {
   const base = `${origin}/`;
   console.log(
     "[webcode] ready.\n" +
-      `  VS Code : ${base}github.com/<owner>/<repo>/tree/<branch>\n` +
-      `  Terminal: ${base}github.com/<owner>/<repo>/tree/<branch>?ui=wtx`,
+      `  VS Code : ${base}gh/<owner>/<repo>/tree/<branch>\n` +
+      `  Terminal: ${base}gh/<owner>/<repo>/tree/<branch>?ui=wtx`,
   );
 
   // 4. optional: expose the same shell on the tailnet via Tailscale Serve.
@@ -298,7 +302,7 @@ async function main() {
         const tsOrigin = `https://${tsHost ?? "<machine>.<tailnet>.ts.net"}`;
         console.log(
           `[webcode] tailscale serve ${TAILSCALE_MOUNT} -> http://127.0.0.1:${SHELL_PORT}${appBase}\n` +
-            `  ${tsOrigin}${appBase}github.com/<owner>/<repo>/tree/<branch>`,
+            `  ${tsOrigin}/gh/<owner>/<repo>/tree/<branch>`,
         );
       } catch (e) {
         console.warn(`[web-code] tailscale serve failed: ${(e as Error).message}`);

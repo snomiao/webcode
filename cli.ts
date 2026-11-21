@@ -30,6 +30,7 @@ import path from "node:path";
 import { serviceAdapter, type InstallOptions, type ServiceAdapter } from "./service";
 import { run, sleep } from "./service/util";
 import { findTailscale } from "./find-tailscale";
+import { serveMounts } from "./repo-route";
 
 const HOSTNAME = "webcode.localhost";
 const PORTLESS_DIR = path.join(os.homedir(), ".portless");
@@ -107,6 +108,8 @@ async function tailscaleUrls(port: number): Promise<string[]> {
     for (const [mount, h] of Object.entries(web.Handlers ?? {})) {
       const target = h.Proxy ? new URL(h.Proxy) : null;
       if (target && Number(target.port) === port) {
+        // The short repository alias is not the app's asset/API base.
+        if (mount.replace(/\/$/, "") === "/gh" && target.pathname.replace(/\/$/, "") !== "/gh") continue;
         const mountPath = mount.endsWith("/") ? mount : `${mount}/`;
         urls.push(`https://${host}${p === "443" ? "" : `:${p}`}${mountPath}`);
       }
@@ -183,7 +186,7 @@ async function status(svc: ServiceAdapter | null): Promise<number> {
   } else {
     console.log("tailscale: not served (install with Tailscale enabled, or set TAILSCALE_SERVE=1)");
   }
-  console.log(`open     : <url>github.com/<owner>/<repo>/tree/<branch>  (?ui=vscode | ?ui=wtx)`);
+  console.log(`open     : <origin>/gh/<owner>/<repo>/tree/<branch>  (?ui=vscode | ?ui=wtx)`);
   if (svc) console.log(`logs     : ${svc.logFile}`);
   return 0;
 }
@@ -205,10 +208,12 @@ async function share(svc: ServiceAdapter | null, args: string[]): Promise<number
   const mount = base === "/" ? "/" : base.slice(0, -1);
 
   if (args[0] === "off" || args[0] === "stop") {
-    const r = await run(bin, ["serve", "--set-path", mount, "off"]);
-    if (r.code !== 0) {
-      console.error(`tailscale serve --set-path ${mount} off failed:\n${r.out}`);
-      return r.code;
+    for (const { mount: route } of serveMounts(base, port ?? 0)) {
+      const r = await run(bin, ["serve", "--set-path", route, "off"]);
+      if (r.code !== 0) {
+        console.error(`tailscale serve --set-path ${route} off failed:\n${r.out}`);
+        return r.code;
+      }
     }
     console.log(`Stopped sharing ${mount} on the tailnet.`);
     return 0;
@@ -224,7 +229,7 @@ async function share(svc: ServiceAdapter | null, args: string[]): Promise<number
   }
   if (base === "/") console.warn("warning: base path is \"/\", so this claims the whole tailnet origin (set WEBCODE_BASE_PATH).");
 
-  if (!live.length) {
+  {
     const { out } = await run(bin, ["serve", "status", "--json"]);
     let funnel = false;
     try {
@@ -236,6 +241,8 @@ async function share(svc: ServiceAdapter | null, args: string[]): Promise<number
       console.error("Tailscale Funnel is on for this machine, so a Serve route here would be public, not tailnet-only. Not sharing.\n  Turn Funnel off (tailscale funnel reset), then webcode share again.");
       return 1;
     }
+  }
+  if (!live.length) {
     const target = `http://127.0.0.1:${port}${base}`;
     const r = await run(bin, ["serve", "--bg", "--set-path", mount, target]);
     if (r.code !== 0) {
@@ -244,6 +251,15 @@ async function share(svc: ServiceAdapter | null, args: string[]): Promise<number
     }
   }
 
+  // Existing installations also need the short alias when sharing again.
+  for (const { mount: route, target } of serveMounts(base, port)) {
+    if (route !== "/gh" || route === mount) continue;
+    const r = await run(bin, ["serve", "--bg", "--set-path", route, target]);
+    if (r.code !== 0) {
+      console.error(`Could not share /gh:\n${r.out}`);
+      return r.code;
+    }
+  }
   const urls = live.length ? live : await tailscaleUrls(port);
   for (const u of urls) {
     const state = await probe(`${u}__config`);
@@ -252,7 +268,7 @@ async function share(svc: ServiceAdapter | null, args: string[]): Promise<number
     // name only when it registered the route itself (TAILSCALE_SERVE=1).
     if (state === "HTTP 403") console.warn("warning: the shell rejects the tailnet host name. Reinstall with Tailscale enabled (webcode service install), or set __VITE_ADDITIONAL_SERVER_ALLOWED_HOSTS and restart.");
   }
-  if (urls[0]) console.log(`open     : ${urls[0]}github.com/<owner>/<repo>/tree/<branch>`);
+  if (urls[0]) console.log(`open     : ${new URL(urls[0]).origin}/gh/<owner>/<repo>/tree/<branch>`);
   console.log("stop     : webcode share off");
   return 0;
 }

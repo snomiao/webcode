@@ -4,7 +4,7 @@
  * pull-if-clean if present), then embeds VS Code web for the folder the
  * server reports.
  *
- *   https://webcode.localhost/github.com/<owner>/<repo>/tree/<branch>
+ *   https://webcode.localhost/gh/<owner>/<repo>/tree/<branch>
  *     -> GET /api/repo/<owner>/<repo>/tree/<branch>   (provision)
  *     -> iframe src = /_vscode/?folder=<local worktree>
  *
@@ -12,7 +12,8 @@
  * `~/<wsRoot>` so you can browse what's already checked out.
  */
 
-import { appPath, appRelativePath } from "./app-base";
+import { appPath } from "./app-base";
+import { repoPath } from "./repo-route";
 
 import {
   createBranchFromLocation,
@@ -144,13 +145,10 @@ async function main() {
 }
 
 /**
- * Accept both /github.com/<owner>/... and the legacy /<owner>/... shape.
+ * Accept /gh/<owner>/... and the legacy provider and owner paths.
  */
 function repoPathFromLocation(): string {
-  return decodeURIComponent(appRelativePath(location.pathname)).replace(
-    /^github\.com\/+/,
-    "",
-  );
+  return repoPath(location.pathname, import.meta.env.BASE_URL);
 }
 
 // Tab title controller.

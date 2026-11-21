@@ -1,0 +1,62 @@
+diff --git a/codex-rs/windows-sandbox-rs/src/desktop.rs b/codex-rs/windows-sandbox-rs/src/desktop.rs
+index 815d135..a12b35d 100644
+--- a/codex-rs/windows-sandbox-rs/src/desktop.rs
++++ b/codex-rs/windows-sandbox-rs/src/desktop.rs
+@@ -62,7 +62,10 @@ use windows_sys::Win32::System::StationsAndDesktops::DESKTOP_WRITE_DAC;
+ use windows_sys::Win32::System::StationsAndDesktops::DESKTOP_WRITE_OWNER;
+ use windows_sys::Win32::System::StationsAndDesktops::DESKTOP_WRITEOBJECTS;
+ use windows_sys::Win32::System::StationsAndDesktops::HDESK;
++use windows_sys::Win32::System::StationsAndDesktops::GetProcessWindowStation;
++use windows_sys::Win32::System::StationsAndDesktops::GetUserObjectInformationW;
+ use windows_sys::Win32::System::StationsAndDesktops::OpenDesktopW;
++use windows_sys::Win32::System::StationsAndDesktops::UOI_NAME;
+ 
+ const PRIVATE_DESKTOP_PREFIX: &str = "CodexSandboxDesktop-";
+ 
+@@ -150,6 +153,27 @@ pub struct LaunchDesktop {
+     startup_name: Vec<u16>,
+ }
+ 
++fn private_desktop_startup_name(name: &str) -> Result<Vec<u16>> {
++    let station = unsafe { GetProcessWindowStation() };
++    if station.is_null() {
++        anyhow::bail!("GetProcessWindowStation failed: {}", unsafe { GetLastError() });
++    }
++    let mut needed = 0;
++    unsafe { GetUserObjectInformationW(station, UOI_NAME, ptr::null_mut(), 0, &mut needed) };
++    if needed == 0 {
++        anyhow::bail!("GetUserObjectInformationW size failed: {}", unsafe { GetLastError() });
++    }
++    let mut station_name = vec![0_u16; (needed as usize).div_ceil(2)];
++    if unsafe {
++        GetUserObjectInformationW(station, UOI_NAME, station_name.as_mut_ptr().cast(), needed, &mut needed)
++    } == 0 {
++        anyhow::bail!("GetUserObjectInformationW name failed: {}", unsafe { GetLastError() });
++    }
++    let end = station_name.iter().position(|c| *c == 0).unwrap_or(station_name.len());
++    let station_name = String::from_utf16(&station_name[..end])?;
++    Ok(to_wide(format!("{station_name}\\{name}")))
++}
++
+ impl LaunchDesktop {
+     pub(crate) fn prepare_legacy(
+         permissions: &ResolvedWindowsSandboxPermissions,
+@@ -215,7 +239,8 @@ impl LaunchDesktop {
+ 
+     pub fn prepare(logs_base_dir: Option<&Path>) -> Result<Self> {
+         let private_desktop = PrivateDesktop::create(logs_base_dir)?;
+-        let startup_name = to_wide(format!("Winsta0\\{}", private_desktop.name));
++        // Service sessions create desktops outside the interactive Winsta0 station.
++        let startup_name = private_desktop_startup_name(&private_desktop.name)?;
+         Ok(Self {
+             _private_desktop: private_desktop,
+             startup_name,
+@@ -251,7 +276,7 @@ impl LaunchDesktop {
+                 handle,
+                 name: name.to_owned(),
+             },
+-            startup_name: to_wide(format!("Winsta0\\{name}")),
++            startup_name: private_desktop_startup_name(name)?,
+         })
+     }
+ 
